@@ -1,4 +1,13 @@
 {
+  "auth": {
+    "authorizedDomains": ["localhost"],
+    "providers": {
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "Omi",
+        "supportEmail": "cason.clark@gmail.com"
+      }
+    }
+  },
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
