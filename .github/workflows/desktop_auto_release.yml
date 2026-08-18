@@ -35,13 +35,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate Omi Bot token
+      - name: Use repository automation token
         id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.OMI_BOT_APP_ID }}
-          private-key: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
-
+        env:
+          OMI_BOT_PAT: ${{ secrets.OMI_BOT_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OMI_BOT_PAT:-}" ]; then
+            echo "::error::OMI_BOT_PAT repository secret is missing; cannot perform trusted recursive workflow operations."
+            exit 1
+          fi
+          {
+            echo 'token<<EOF'
+            echo "$OMI_BOT_PAT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Plan desktop release
         id: plan
         env:
@@ -92,16 +100,21 @@ jobs:
     env:
       CI_GATE_TIMEOUT_SECONDS: ${{ vars.DESKTOP_CI_GATE_TIMEOUT_SECONDS || '3600' }}
     steps:
-      - name: Generate Omi Bot token
+      - name: Use repository automation token
         id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.OMI_BOT_APP_ID }}
-          private-key: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
-
-      # The native tag must be pushed by the Omi Bot installation, rather than
-      # the workflow's GITHUB_TOKEN. GitHub suppresses recursively generated
-      # events for GITHUB_TOKEN, which leaves Codemagic no tag webhook to build.
+        env:
+          OMI_BOT_PAT: ${{ secrets.OMI_BOT_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OMI_BOT_PAT:-}" ]; then
+            echo "::error::OMI_BOT_PAT repository secret is missing; cannot perform trusted recursive workflow operations."
+            exit 1
+          fi
+          {
+            echo 'token<<EOF'
+            echo "$OMI_BOT_PAT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Checkout
         uses: actions/checkout@v7
         with:

@@ -315,11 +315,11 @@ class CliOutputContractTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
-    def test_app_token_requests_only_required_permissions(self):
+    def test_repository_automation_token_is_required(self):
         workflow = (Path(__file__).resolve().parents[1] / "workflows" /
                     "desktop_retry_beta_qualification.yml").read_text(encoding="utf-8")
-        self.assertIn("          permission-actions: write\n", workflow)
-        self.assertIn("          permission-contents: read\n", workflow)
+        self.assertIn("OMI_BOT_PAT", workflow)
+        self.assertIn("trusted recursive workflow operations", workflow)
 
 
 if __name__ == "__main__":

@@ -95,9 +95,10 @@ class DesktopReleaseSourceIdentityTests(unittest.TestCase):
         return self._git(repository, "rev-parse", "HEAD")
 
     def _repository_with_planned_source(self) -> tuple[tempfile.TemporaryDirectory[str], Path, str]:
-        directory = tempfile.TemporaryDirectory()
+        directory = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         repository = Path(directory.name)
         self._git(repository, "init")
+        self._git(repository, "config", "gc.auto", "0")
         self._git(repository, "config", "user.name", "Release test")
         self._git(repository, "config", "user.email", "release-test@example.com")
         planned_source_sha = self._commit(
