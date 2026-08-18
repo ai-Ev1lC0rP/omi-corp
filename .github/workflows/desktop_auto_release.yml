@@ -35,37 +35,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check Omi Bot credentials
-        id: omi-bot-credentials
+
+      - name: Use repository automation token
+
+        id: app-token
         env:
-          OMI_BOT_APP_ID: ${{ secrets.OMI_BOT_APP_ID }}
-          OMI_BOT_PRIVATE_KEY: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
+          OMI_BOT_PAT: ${{ secrets.OMI_BOT_PAT }}
         run: |
           set -euo pipefail
-          if [ -n "${OMI_BOT_APP_ID:-}" ] && [ -n "${OMI_BOT_PRIVATE_KEY:-}" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [ -z "${OMI_BOT_PAT:-}" ]; then
+            echo "::error::OMI_BOT_PAT repository secret is missing; cannot perform trusted recursive workflow operations."
+            exit 1
           fi
-          echo "available=false" >> "$GITHUB_OUTPUT"
-          message="Omi Bot credentials are not configured; skipping scheduled desktop release planning instead of failing at actions/create-github-app-token."
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "::warning::$message"
-            echo "$message" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          echo "::error::$message Configure OMI_BOT_APP_ID and OMI_BOT_PRIVATE_KEY before manual release planning."
-          exit 1
-
-      - name: Generate Omi Bot token
-        if: steps.omi-bot-credentials.outputs.available == 'true'
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.OMI_BOT_APP_ID }}
-          private-key: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
-
+          {
+            echo 'token<<EOF'
+            echo "$OMI_BOT_PAT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Plan desktop release
-        if: steps.omi-bot-credentials.outputs.available == 'true'
         id: plan
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -84,7 +71,7 @@ jobs:
       # emit a warning annotation for intentional deferrals so a green run with
       # only plan-release is never silent.
       - name: Surface planner non-release decision
-        if: steps.plan.outputs.should_release != 'true' && steps.omi-bot-credentials.outputs.available == 'true'
+        if: steps.plan.outputs.should_release != 'true'
         env:
           PLAN_REASON: ${{ steps.plan.outputs.reason }}
         run: |
@@ -115,16 +102,21 @@ jobs:
     env:
       CI_GATE_TIMEOUT_SECONDS: ${{ vars.DESKTOP_CI_GATE_TIMEOUT_SECONDS || '3600' }}
     steps:
-      - name: Generate Omi Bot token
+      - name: Use repository automation token
         id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.OMI_BOT_APP_ID }}
-          private-key: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
-
-      # The native tag must be pushed by the Omi Bot installation, rather than
-      # the workflow's GITHUB_TOKEN. GitHub suppresses recursively generated
-      # events for GITHUB_TOKEN, which leaves Codemagic no tag webhook to build.
+        env:
+          OMI_BOT_PAT: ${{ secrets.OMI_BOT_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OMI_BOT_PAT:-}" ]; then
+            echo "::error::OMI_BOT_PAT repository secret is missing; cannot perform trusted recursive workflow operations."
+            exit 1
+          fi
+          {
+            echo 'token<<EOF'
+            echo "$OMI_BOT_PAT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Checkout
         uses: actions/checkout@v7
         with:

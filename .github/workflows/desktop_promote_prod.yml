@@ -51,13 +51,21 @@ jobs:
           ' /tmp/desktop-backend-health.json >/dev/null
           rm -f /tmp/desktop-backend-health.json
 
-      - name: Generate Omi Bot token
+      - name: Use repository automation token
         id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.OMI_BOT_APP_ID }}
-          private-key: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
-
+        env:
+          OMI_BOT_PAT: ${{ secrets.OMI_BOT_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OMI_BOT_PAT:-}" ]; then
+            echo "::error::OMI_BOT_PAT repository secret is missing; cannot perform trusted recursive workflow operations."
+            exit 1
+          fi
+          {
+            echo 'token<<EOF'
+            echo "$OMI_BOT_PAT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Select and validate the exact trusted qualification
         id: candidate
         env:

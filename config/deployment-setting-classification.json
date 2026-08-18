@@ -48,6 +48,7 @@
       "OPENROUTER_API_KEY",
       "OMI_BOT_APP_ID",
       "OMI_BOT_PRIVATE_KEY",
+      "OMI_BOT_PAT",
       "PINECONE_API_KEY",
       "RAPID_API_KEY",
       "REDIS_DB_PASSWORD",

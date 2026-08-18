@@ -40,39 +40,24 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Check Omi Bot credentials
-        id: omi-bot-credentials
+
+      - name: Use repository automation token
+
+        id: app-token
         env:
-          OMI_BOT_APP_ID: ${{ secrets.OMI_BOT_APP_ID }}
-          OMI_BOT_PRIVATE_KEY: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
+          OMI_BOT_PAT: ${{ secrets.OMI_BOT_PAT }}
         run: |
           set -euo pipefail
-          if [ -n "${OMI_BOT_APP_ID:-}" ] && [ -n "${OMI_BOT_PRIVATE_KEY:-}" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [ -z "${OMI_BOT_PAT:-}" ]; then
+            echo "::error::OMI_BOT_PAT repository secret is missing; cannot perform trusted recursive workflow operations."
+            exit 1
           fi
-          echo "available=false" >> "$GITHUB_OUTPUT"
-          message="Omi Bot credentials are not configured; skipping scheduled desktop beta retry planning instead of failing at actions/create-github-app-token."
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "::warning::$message"
-            echo "$message" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          echo "::error::$message Configure OMI_BOT_APP_ID and OMI_BOT_PRIVATE_KEY before manual retry planning."
-          exit 1
-
-      - name: Generate Omi Bot token
-        if: steps.omi-bot-credentials.outputs.available == 'true'
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.OMI_BOT_APP_ID }}
-          private-key: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
-          permission-actions: write
-          permission-contents: read
-
+          {
+            echo 'token<<EOF'
+            echo "$OMI_BOT_PAT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Gather server-derived candidate and qualification state
-        if: steps.omi-bot-credentials.outputs.available == 'true'
         id: gather
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -101,7 +86,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Decide whether to retry the newest candidate
-        if: steps.omi-bot-credentials.outputs.available == 'true'
         id: decide
         run: |
           set -euo pipefail
@@ -128,7 +112,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Re-dispatch trusted macOS qualification for the newest candidate
-        if: steps.omi-bot-credentials.outputs.available == 'true' && steps.decide.outputs.should_retry == 'true'
+        if: steps.decide.outputs.should_retry == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
