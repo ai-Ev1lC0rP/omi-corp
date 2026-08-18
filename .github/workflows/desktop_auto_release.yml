@@ -35,7 +35,9 @@ jobs:
         with:
           fetch-depth: 0
 
+
       - name: Use repository automation token
+
         id: app-token
         env:
           OMI_BOT_PAT: ${{ secrets.OMI_BOT_PAT }}
