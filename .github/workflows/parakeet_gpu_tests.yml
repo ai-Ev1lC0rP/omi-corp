@@ -38,16 +38,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Check GCP credentials
+        id: gcp-credentials
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          if [ -n "${GCP_CREDENTIALS:-}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          message="GCP_CREDENTIALS is not configured; skipping scheduled Parakeet GPU tests instead of failing at google-github-actions/auth."
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "::warning::$message"
+            echo "$message" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::error::$message Configure GCP_CREDENTIALS before manual GPU tests."
+          exit 1
+
       - name: Google Auth
+        if: steps.gcp-credentials.outputs.available == 'true'
         id: auth
         uses: 'google-github-actions/auth@v3'
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS }}
 
       - name: Set up gcloud
+        if: steps.gcp-credentials.outputs.available == 'true'
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Get GKE credentials
+        if: steps.gcp-credentials.outputs.available == 'true'
         uses: google-github-actions/get-gke-credentials@v3
         with:
           cluster_name: dev-omi-gke
@@ -55,6 +78,7 @@ jobs:
           project_id: based-hardware-dev
 
       - name: Resolve image tag
+        if: steps.gcp-credentials.outputs.available == 'true'
         id: tag
         run: |
           if [[ -n "${{ github.event.inputs.image_tag }}" ]]; then
@@ -68,11 +92,13 @@ jobs:
           echo "Using image tag: $(cat $GITHUB_OUTPUT | grep tag | cut -d= -f2)"
 
       - name: Clean up previous test job
+        if: steps.gcp-credentials.outputs.available == 'true'
         run: |
           kubectl -n ${{ env.NAMESPACE }} delete job ${{ env.JOB_NAME }} --ignore-not-found=true
           sleep 5
 
       - name: Create GPU test job
+        if: steps.gcp-credentials.outputs.available == 'true'
         run: |
           cat <<'JOBEOF' | envsubst '$JOB_NAME $NAMESPACE $IMAGE_TAG $DER_REPORT_ONLY $WER_REPORT_ONLY' | kubectl apply -f -
           apiVersion: batch/v1
@@ -262,6 +288,7 @@ jobs:
           WER_REPORT_ONLY: ${{ github.event.inputs.wer_report_only || 'false' }}
 
       - name: Wait for job completion
+        if: steps.gcp-credentials.outputs.available == 'true'
         run: |
           echo "Waiting for GPU test job to complete (timeout: 45 min)..."
           kubectl -n ${{ env.NAMESPACE }} wait --for=condition=complete \
@@ -273,7 +300,7 @@ jobs:
           echo "Job status: $STATUS"
 
       - name: Collect test logs
-        if: always()
+        if: always() && steps.gcp-credentials.outputs.available == 'true'
         run: |
           mkdir -p artifacts/parakeet
           echo "=== GPU Test Job Logs ==="
@@ -284,7 +311,7 @@ jobs:
           kubectl -n ${{ env.NAMESPACE }} get events --field-selector involvedObject.name=${{ env.JOB_NAME }} 2>&1 || true
 
       - name: Extract DER diagnostics artifact
-        if: always()
+        if: always() && steps.gcp-credentials.outputs.available == 'true'
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -305,7 +332,7 @@ jobs:
           PY
 
       - name: Upload DER diagnostics artifact
-        if: always()
+        if: always() && steps.gcp-credentials.outputs.available == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: parakeet-der-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
@@ -314,6 +341,7 @@ jobs:
           retention-days: 30
 
       - name: Check job result
+        if: steps.gcp-credentials.outputs.available == 'true'
         run: |
           SUCCEEDED=$(kubectl -n ${{ env.NAMESPACE }} get job ${{ env.JOB_NAME }} \
             -o jsonpath='{.status.succeeded}')
@@ -330,6 +358,6 @@ jobs:
           fi
 
       - name: Clean up test job
-        if: always()
+        if: always() && steps.gcp-credentials.outputs.available == 'true'
         run: |
           kubectl -n ${{ env.NAMESPACE }} delete job ${{ env.JOB_NAME }} --ignore-not-found=true

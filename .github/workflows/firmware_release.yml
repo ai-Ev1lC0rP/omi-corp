@@ -185,16 +185,21 @@ jobs:
           fi
           echo "Publishing from main — OK."
 
-      - name: Generate Omi Bot token
+      - name: Use repository automation token
         id: app-token
-        if: ${{ github.event.inputs.publish == 'publish' }}
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.OMI_BOT_APP_ID }}
-          private-key: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
-          # Least privilege: only what creating a release/tag needs.
-          permission-contents: write
-
+        env:
+          OMI_BOT_PAT: ${{ secrets.OMI_BOT_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OMI_BOT_PAT:-}" ]; then
+            echo "::error::OMI_BOT_PAT repository secret is missing; cannot perform trusted recursive workflow operations."
+            exit 1
+          fi
+          {
+            echo 'token<<EOF'
+            echo "$OMI_BOT_PAT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Publish GitHub Release
         if: ${{ github.event.inputs.publish == 'publish' }}
         env:

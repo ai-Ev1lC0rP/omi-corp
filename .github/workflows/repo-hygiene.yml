@@ -56,16 +56,21 @@ jobs:
       # A GITHUB_TOKEN-authored PR does not trigger pull_request workflows, so it
       # would arrive with zero checks run. The app token exists so the diff is
       # verified by the same lanes as any human PR.
-      - name: Mint Omi Bot token
-        if: steps.retire.outputs.retired != '0'
+      - name: Use repository automation token
         id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.OMI_BOT_APP_ID }}
-          private-key: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
-          permission-contents: write
-          permission-pull-requests: write
-
+        env:
+          OMI_BOT_PAT: ${{ secrets.OMI_BOT_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OMI_BOT_PAT:-}" ]; then
+            echo "::error::OMI_BOT_PAT repository secret is missing; cannot perform trusted recursive workflow operations."
+            exit 1
+          fi
+          {
+            echo 'token<<EOF'
+            echo "$OMI_BOT_PAT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Open or update the retirement PR
         if: steps.retire.outputs.retired != '0'
         uses: peter-evans/create-pull-request@v8
