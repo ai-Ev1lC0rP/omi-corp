@@ -1100,8 +1100,12 @@ auth_debug "AFTER plist edits: auth_isSignedIn=$(defaults read "$BUNDLE_ID" auth
 substep "Copying GoogleService-Info.plist"
 if [ "$LOCAL_PROFILE" = true ] && [ -f "Desktop/Sources/GoogleService-Info-Local.plist" ]; then
     cp -f Desktop/Sources/GoogleService-Info-Local.plist "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist"
+elif [ -f "Desktop/Sources/GoogleService-Info-Cason-Dev.plist" ]; then
+    cp -f Desktop/Sources/GoogleService-Info-Cason-Dev.plist "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist"
 elif [ -f "Desktop/Sources/GoogleService-Info-Dev.plist" ]; then
     cp -f Desktop/Sources/GoogleService-Info-Dev.plist "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist"
+elif [ -f "Desktop/Sources/GoogleService-Info-Cason.plist" ]; then
+    cp -f Desktop/Sources/GoogleService-Info-Cason.plist "$APP_BUNDLE/Contents/Resources/GoogleService-Info.plist"
 else
     cp -f Desktop/Sources/GoogleService-Info.plist "$APP_BUNDLE/Contents/Resources/"
 fi

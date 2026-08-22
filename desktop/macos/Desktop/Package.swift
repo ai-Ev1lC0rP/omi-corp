@@ -87,6 +87,8 @@ let package = Package(
       path: "Sources",
       exclude: [
         "GoogleService-Info-Dev.plist",
+        "GoogleService-Info-Cason.plist",
+        "GoogleService-Info-Cason-Dev.plist",
         "GoogleService-Info-Local.plist",
         "Theme",
         "OmiSupport",
