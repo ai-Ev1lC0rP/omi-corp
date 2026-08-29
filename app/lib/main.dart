@@ -35,6 +35,7 @@ import 'package:omi/env/environment_profile.dart';
 import 'package:omi/env/prod_env.dart';
 import 'package:omi/firebase_options_local.dart' as local;
 import 'package:omi/firebase_options_prod.dart' as prod;
+import 'package:omi/firebase_options_self_hosted.dart' as self_hosted;
 import 'package:omi/flavors.dart';
 import 'package:omi/startup_routing.dart';
 import 'package:omi/l10n/app_localizations.dart';
@@ -142,9 +143,13 @@ Future _init() async {
   // Firebase
   if (Firebase.apps.isEmpty) {
     final profile = Env.profile;
-    final options = profile == AppEnvironmentProfile.localDev
-        ? local.DefaultFirebaseOptions.currentPlatform
-        : prod.DefaultFirebaseOptions.currentPlatform;
+    final options = switch (profile) {
+      AppEnvironmentProfile.localDev => local.DefaultFirebaseOptions.currentPlatform,
+      AppEnvironmentProfile.selfHosted => self_hosted.DefaultFirebaseOptions.currentPlatform,
+      AppEnvironmentProfile.mobileBeta ||
+      AppEnvironmentProfile.production =>
+        prod.DefaultFirebaseOptions.currentPlatform,
+    };
     Env.validateFirebaseProject(projectId: options.projectId);
     await Firebase.initializeApp(options: options);
   } else {

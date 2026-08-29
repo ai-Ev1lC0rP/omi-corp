@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/env/env.dart';
 import 'package:omi/env/environment_profile.dart';
 import 'package:omi/flavors.dart';
+import 'package:omi/firebase_options_local.dart' as local_firebase;
 import 'package:omi/startup_routing.dart';
 import 'dart:io';
 
@@ -52,11 +53,32 @@ void main() {
   });
 
   group('mobile environment profiles', () {
+    test('local iOS Firebase options use an SDK-valid application id', () {
+      expect(
+        local_firebase.DefaultFirebaseOptions.ios.appId,
+        matches(RegExp(r'^1:[0-9]{12}:ios:[0-9a-f]{32}$')),
+      );
+    });
+
+    test('local iOS Firebase options use an SDK-valid API key shape', () {
+      expect(
+        local_firebase.DefaultFirebaseOptions.ios.apiKey,
+        matches(RegExp(r'^A[A-Za-z0-9_-]{38}$')),
+      );
+    });
+
     test('local development is emulator-first and does not allow production data', () {
       expect(AppEnvironmentProfile.localDev.defaultApiBaseUrl, 'http://127.0.0.1:8000/');
       expect(AppEnvironmentProfile.localDev.firebaseProjectId, 'demo-omi-local');
       expect(AppEnvironmentProfile.localDev.usesFirebaseAuthEmulator, isTrue);
       expect(AppEnvironmentProfile.localDev.allowsProductionData, isFalse);
+    });
+
+    test('self-hosted development uses the cason Firebase identity with a local API', () {
+      expect(AppEnvironmentProfile.selfHosted.defaultApiBaseUrl, 'http://127.0.0.1:8000/');
+      expect(AppEnvironmentProfile.selfHosted.firebaseProjectId, 'cason-omi');
+      expect(AppEnvironmentProfile.selfHosted.usesFirebaseAuthEmulator, isFalse);
+      expect(AppEnvironmentProfile.selfHosted.allowsProductionData, isTrue);
     });
 
     test('mobile beta explicitly pairs production Firebase with the dev serving plane', () {
@@ -82,6 +104,23 @@ void main() {
         () => Env.validateFirebaseProject(
           projectId: 'based-hardware',
           configuredProfile: AppEnvironmentProfile.localDev,
+        ),
+        throwsStateError,
+      );
+    });
+
+    test('self-hosted profile accepts only the cason Firebase project', () {
+      expect(
+        () => Env.validateFirebaseProject(
+          projectId: 'cason-omi',
+          configuredProfile: AppEnvironmentProfile.selfHosted,
+        ),
+        returnsNormally,
+      );
+      expect(
+        () => Env.validateFirebaseProject(
+          projectId: 'based-hardware',
+          configuredProfile: AppEnvironmentProfile.selfHosted,
         ),
         throwsStateError,
       );
@@ -158,6 +197,28 @@ void main() {
         () => validateApplicationStartupRouting(
           environment: Environment.dev,
           configuredApiBaseUrl: 'https://api.omiapi.com/',
+        ),
+        throwsStateError,
+      );
+    });
+
+    test('self-hosted development accepts a secure public reverse proxy', () {
+      expect(
+        () => Env.validateStartupRouting(
+          productionFamily: false,
+          configuredProfile: AppEnvironmentProfile.selfHosted,
+          configuredApiBaseUrl: 'https://omi-api.casonclark.com/',
+        ),
+        returnsNormally,
+      );
+    });
+
+    test('self-hosted development rejects an insecure public endpoint', () {
+      expect(
+        () => Env.validateStartupRouting(
+          productionFamily: false,
+          configuredProfile: AppEnvironmentProfile.selfHosted,
+          configuredApiBaseUrl: 'http://public.example.test/',
         ),
         throwsStateError,
       );

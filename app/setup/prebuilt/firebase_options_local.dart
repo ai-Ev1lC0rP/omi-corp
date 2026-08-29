@@ -26,34 +26,40 @@ class DefaultFirebaseOptions {
   }
 
   static const android = FirebaseOptions(
-    apiKey: 'local-firebase-auth-emulator-api-key',
-    appId: '1:000000000000:android:omi-dev-local',
+    apiKey: 'A00000000000000000000000000000000000000',
+    appId: '1:000000000000:android:00000000000000000000000000000000',
     messagingSenderId: '000000000000',
     projectId: 'demo-omi-local',
     storageBucket: 'demo-omi-local.localhost',
   );
 
   static const ios = FirebaseOptions(
-    apiKey: 'local-firebase-auth-emulator-api-key',
-    appId: '1:000000000000:ios:omi-dev-local',
+    apiKey: 'A00000000000000000000000000000000000000',
+    appId: '1:000000000000:ios:00000000000000000000000000000000',
     messagingSenderId: '000000000000',
     projectId: 'demo-omi-local',
     storageBucket: 'demo-omi-local.localhost',
-    iosBundleId: 'com.friend-app-with-wearable.ios12.development',
+    iosBundleId: String.fromEnvironment(
+      'OMI_IOS_BUNDLE_ID',
+      defaultValue: 'com.friend-app-with-wearable.ios12.development',
+    ),
   );
 
   static const macos = FirebaseOptions(
-    apiKey: 'local-firebase-auth-emulator-api-key',
-    appId: '1:000000000000:ios:omi-dev-local',
+    apiKey: 'A00000000000000000000000000000000000000',
+    appId: '1:000000000000:ios:00000000000000000000000000000000',
     messagingSenderId: '000000000000',
     projectId: 'demo-omi-local',
     storageBucket: 'demo-omi-local.localhost',
-    iosBundleId: 'com.friend-app-with-wearable.ios12.development',
+    iosBundleId: String.fromEnvironment(
+      'OMI_IOS_BUNDLE_ID',
+      defaultValue: 'com.friend-app-with-wearable.ios12.development',
+    ),
   );
 
   static const web = FirebaseOptions(
-    apiKey: 'local-firebase-auth-emulator-api-key',
-    appId: '1:000000000000:web:omi-dev-local',
+    apiKey: 'A00000000000000000000000000000000000000',
+    appId: '1:000000000000:web:00000000000000000000000000000000',
     messagingSenderId: '000000000000',
     projectId: 'demo-omi-local',
     authDomain: 'demo-omi-local.firebaseapp.com',

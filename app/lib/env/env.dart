@@ -76,13 +76,14 @@ abstract class Env {
 
   static void validateProfilePairing() {
     final productionFlavor = F.env == Environment.prod;
-    if (!productionFlavor && profile != AppEnvironmentProfile.localDev) {
+    if (!productionFlavor && profile != AppEnvironmentProfile.localDev && profile != AppEnvironmentProfile.selfHosted) {
       throw StateError(
         'Profile ${profile.name} must be built with the prod flavor.',
       );
     }
-    if (productionFlavor && profile == AppEnvironmentProfile.localDev) {
-      throw StateError('The prod flavor cannot use the local_dev profile.');
+    if (productionFlavor &&
+        (profile == AppEnvironmentProfile.localDev || profile == AppEnvironmentProfile.selfHosted)) {
+      throw StateError('The prod flavor cannot use a local development profile.');
     }
   }
 
@@ -118,6 +119,15 @@ abstract class Env {
         throw StateError(
           'Profile local_dev requires a loopback or private-network API endpoint; '
           'use mobile_beta for https://api.omiapi.com/.',
+        );
+      }
+      return;
+    }
+
+    if (effectiveProfile == AppEnvironmentProfile.selfHosted) {
+      if (!_isLocalDevelopmentApi(normalized) && !_isSecureApi(normalized)) {
+        throw StateError(
+          'Profile self_hosted requires a loopback, private-network, or secure HTTPS API endpoint.',
         );
       }
       return;
@@ -171,6 +181,11 @@ abstract class Env {
         (first == 172 && second >= 16 && second <= 31) ||
         (first == 192 && second == 168) ||
         (first == 127);
+  }
+
+  static bool _isSecureApi(String base) {
+    final uri = Uri.tryParse(base);
+    return uri != null && uri.scheme == 'https' && uri.host.isNotEmpty;
   }
 
   static String? get googleMapsApiKey => _instance.googleMapsApiKey;

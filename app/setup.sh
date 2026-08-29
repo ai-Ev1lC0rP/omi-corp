@@ -76,11 +76,13 @@ function generate_ios_custom_config() {
     # Keep ordinary local builds installable beside the App Store build.
     local suffix
     suffix=$(generate_device_suffix)
-    echo "APP_BUNDLE_IDENTIFIER=com.friend-app-with-wearable.ios12-${suffix}" >> ios/Flutter/Custom.xcconfig
+    IOS_APP_BUNDLE_IDENTIFIER="${OMI_MOBILE_LOCAL_BUNDLE_ID:-com.friend-app-with-wearable.ios12-${suffix}}"
+    echo "APP_BUNDLE_IDENTIFIER=${IOS_APP_BUNDLE_IDENTIFIER}" >> ios/Flutter/Custom.xcconfig
   else
     # Beta uses a distinct bundle/callback identity and must be provisioned
     # explicitly by the developer's Apple team.
-    echo "APP_BUNDLE_IDENTIFIER=${OMI_MOBILE_BETA_BUNDLE_ID:-com.friend-app-with-wearable.ios12.beta}" >> ios/Flutter/Custom.xcconfig
+    IOS_APP_BUNDLE_IDENTIFIER="${OMI_MOBILE_BETA_BUNDLE_ID:-com.friend-app-with-wearable.ios12.beta}"
+    echo "APP_BUNDLE_IDENTIFIER=${IOS_APP_BUNDLE_IDENTIFIER}" >> ios/Flutter/Custom.xcconfig
     echo "AUTH_CALLBACK_SCHEME=${callback_scheme}" >> ios/Flutter/Custom.xcconfig
   fi
 }
@@ -200,7 +202,7 @@ function run_build_ios() {
   flutter pub get \
     && pushd ios && pod install --repo-update && popd \
     && dart run build_runner build \
-    && flutter run --flavor "$flavor" "$@"
+    && flutter run --flavor "$flavor" --dart-define="OMI_IOS_BUNDLE_ID=${IOS_APP_BUNDLE_IDENTIFIER}" "$@"
 }
 
 

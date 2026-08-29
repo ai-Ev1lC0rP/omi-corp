@@ -5,7 +5,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>daily-summary</string>
-		<string>com.friend-app-with-wearable.ios12.daily-summary</string>
+		<string>com.omi.omi-corp-boot.daily-summary</string>
 		<string>dev.flutter.background.refresh</string>
 		<string>com.pravera.flutter_foreground_task.refresh</string>
 	</array>

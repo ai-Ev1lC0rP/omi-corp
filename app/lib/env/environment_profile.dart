@@ -12,6 +12,14 @@ enum AppEnvironmentProfile {
     usesFirebaseAuthEmulator: true,
     allowsProductionData: false,
   ),
+  selfHosted(
+    name: 'self_hosted',
+    defaultApiBaseUrl: 'http://127.0.0.1:8000/',
+    firebaseProjectId: 'cason-omi',
+    authCallbackScheme: 'omi-dev',
+    usesFirebaseAuthEmulator: false,
+    allowsProductionData: true,
+  ),
   mobileBeta(
     name: 'mobile_beta',
     defaultApiBaseUrl: 'https://api.omiapi.com/',
@@ -55,7 +63,7 @@ enum AppEnvironmentProfile {
       (profile) => profile.name == requested,
       orElse: () => throw StateError(
         'Unknown OMI_APP_PROFILE "$requested". '
-        'Use local_dev, mobile_beta, or production.',
+        'Use local_dev, self_hosted, mobile_beta, or production.',
       ),
     );
   }
