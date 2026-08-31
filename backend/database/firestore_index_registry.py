@@ -129,6 +129,12 @@ INDEX_ONLY_REQUIREMENTS = (
         'COLLECTION',
         (_asc('discarded'), _asc('status'), _asc('structured.category'), _desc('created_at'), _desc('__name__')),
     ),
+    FirestoreIndexRequirement(
+        'conversations_discarded_status_created',
+        'conversations',
+        'COLLECTION',
+        (_asc('discarded'), _asc('status'), _desc('created_at'), _desc('__name__')),
+    ),
     # `GET /v1/conversations?sources=...` retains the legacy
     # `include_discarded=true` default, so this is distinct from the archive
     # query below that explicitly excludes discarded captures.
@@ -173,6 +179,18 @@ INDEX_ONLY_REQUIREMENTS = (
         'memory_operations',
         'COLLECTION',
         (_asc('status'), _desc('created_at'), _asc('__name__')),
+    ),
+    FirestoreIndexRequirement(
+        'messages_chat_session_created_ascending',
+        'messages',
+        'COLLECTION',
+        (_asc('chat_session_id'), _asc('created_at'), _asc('__name__')),
+    ),
+    FirestoreIndexRequirement(
+        'messages_chat_session_created_descending',
+        'messages',
+        'COLLECTION',
+        (_asc('chat_session_id'), _desc('created_at'), _desc('__name__')),
     ),
     FirestoreIndexRequirement(
         'screen_activity_app_timestamp',

@@ -605,6 +605,7 @@ class ChatPageState extends State<ChatPage> with AutomaticKeepAliveClientMixin {
                                                               ),
                                                             ),
                                                             child: TextField(
+                                                              key: const ValueKey('chat-message-input'),
                                                               enabled: true,
                                                               controller: textController,
                                                               focusNode: textFieldFocusNode,
@@ -647,6 +648,7 @@ class ChatPageState extends State<ChatPage> with AutomaticKeepAliveClientMixin {
                                               // Send button while recording — transcribes and sends in one tap.
                                               if (voiceRecorderProvider.isActive)
                                                 GestureDetector(
+                                                  key: const ValueKey('chat-voice-send-button'),
                                                   onTap: voiceRecorderProvider.state == VoiceRecorderState.recording
                                                       ? () {
                                                           HapticFeedback.mediumImpact();
@@ -680,6 +682,7 @@ class ChatPageState extends State<ChatPage> with AutomaticKeepAliveClientMixin {
                                                   shouldShowVoiceRecorderButton() &&
                                                   textController.text.isEmpty)
                                                 GestureDetector(
+                                                  key: const ValueKey('chat-voice-record-button'),
                                                   onTap: () {
                                                     HapticFeedback.lightImpact();
                                                     FocusScope.of(context).unfocus();
@@ -715,6 +718,7 @@ class ChatPageState extends State<ChatPage> with AutomaticKeepAliveClientMixin {
                                                         connectivityProvider.isConnected;
 
                                                     return GestureDetector(
+                                                      key: const ValueKey('chat-message-send-button'),
                                                       onTap: canSend
                                                           ? () {
                                                               HapticFeedback.mediumImpact();
@@ -757,6 +761,7 @@ class ChatPageState extends State<ChatPage> with AutomaticKeepAliveClientMixin {
                                       bottom: 0,
                                       child: Center(
                                         child: GestureDetector(
+                                          key: const ValueKey('chat-voice-stop-button'),
                                           onTap: () {
                                             HapticFeedback.lightImpact();
                                             voiceRecorderProvider.processRecording();

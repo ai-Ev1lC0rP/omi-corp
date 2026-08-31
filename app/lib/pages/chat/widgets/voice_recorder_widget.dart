@@ -100,6 +100,7 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> with SingleTi
                     ),
                   ),
                   GestureDetector(
+                    key: const ValueKey('chat-voice-retry-button'),
                     onTap: provider.retry,
                     child: const Padding(
                       padding: EdgeInsets.symmetric(horizontal: 8),

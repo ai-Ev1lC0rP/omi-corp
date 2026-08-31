@@ -4,6 +4,7 @@ from typing import List, Optional
 import av
 
 from fastapi import APIRouter, UploadFile, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pydub import AudioSegment
 
@@ -27,6 +28,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(route_class=MultipartMaxPartSizeRoute)
+
+SPEECH_PROFILE_MIN_DURATION_SECONDS = 5
+SPEECH_PROFILE_MAX_DURATION_SECONDS = 155
 
 
 class HasSpeechProfileResponse(BaseModel):
@@ -55,6 +59,14 @@ def get_speech_profile(uid: str = Depends(auth.get_current_user_uid)):
     return {'url': get_profile_audio_if_exists(uid, download=False)}
 
 
+@router.get('/v4/speech-profile/audio', tags=['v3'], response_class=FileResponse)
+def download_speech_profile(uid: str = Depends(auth.get_current_user_uid)):
+    file_path = get_profile_audio_if_exists(uid, download=True)
+    if file_path is None:
+        raise HTTPException(status_code=404, detail='Speech profile not found')
+    return FileResponse(file_path, media_type='audio/wav', filename='speech_profile.wav')
+
+
 # ******************************************
 # ************* UPLOAD SAMPLE **************
 # ******************************************
@@ -78,8 +90,17 @@ def upload_profile(file: UploadFile, uid: str = Depends(auth.get_current_user_ui
     if aseg.frame_rate != 16000:
         raise HTTPException(status_code=400, detail="Invalid codec, must be opus 16khz.")
 
-    if aseg.duration_seconds < 5 or aseg.duration_seconds > 120:
-        raise HTTPException(status_code=400, detail="Audio duration is invalid (must be 5-120 seconds)")
+    if (
+        aseg.duration_seconds < SPEECH_PROFILE_MIN_DURATION_SECONDS
+        or aseg.duration_seconds > SPEECH_PROFILE_MAX_DURATION_SECONDS
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Audio duration is invalid "
+                f"(must be {SPEECH_PROFILE_MIN_DURATION_SECONDS}-{SPEECH_PROFILE_MAX_DURATION_SECONDS} seconds)"
+            ),
+        )
 
     apply_vad_for_speech_profile(file_path)
 

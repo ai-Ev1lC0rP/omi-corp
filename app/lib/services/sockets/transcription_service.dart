@@ -68,6 +68,7 @@ enum SocketServiceState { connected, disconnected }
 class TranscriptSegmentSocketService implements IPureSocketListener {
   late IPureSocket _socket;
   final Map<Object, ITransctiptSegmentSocketServiceListener> _listeners = {};
+  final List<dynamic> _pendingMessages = [];
 
   /// Access to the underlying socket (for composite service creation)
   IPureSocket get socket => _socket;
@@ -124,7 +125,7 @@ class TranscriptSegmentSocketService implements IPureSocketListener {
     }
 
     String url =
-        Env.apiBaseUrl!.replaceFirst('https://', 'wss://').replaceFirst('http://', 'ws://') + 'v4/listen$params';
+        '${Env.apiBaseUrl!.replaceFirst('https://', 'wss://').replaceFirst('http://', 'ws://')}v4/listen$params';
 
     _socket = PureSocket(url);
     _socket.setListener(this);
@@ -148,6 +149,14 @@ class TranscriptSegmentSocketService implements IPureSocketListener {
   void subscribe(Object context, ITransctiptSegmentSocketServiceListener listener) {
     _listeners.remove(context.hashCode);
     _listeners.putIfAbsent(context.hashCode, () => listener);
+
+    if (_pendingMessages.isNotEmpty) {
+      final pendingMessages = List<dynamic>.from(_pendingMessages);
+      _pendingMessages.clear();
+      for (final message in pendingMessages) {
+        _dispatchMessage(message);
+      }
+    }
   }
 
   void unsubscribe(Object context) {
@@ -170,6 +179,7 @@ class TranscriptSegmentSocketService implements IPureSocketListener {
   Future stop({String? reason}) async {
     await _socket.stop();
     _listeners.clear();
+    _pendingMessages.clear();
 
     if (reason != null) {
       Logger.debug(reason);
@@ -205,6 +215,18 @@ class TranscriptSegmentSocketService implements IPureSocketListener {
 
   @override
   void onMessage(event) {
+    if (_listeners.isEmpty) {
+      if (_pendingMessages.length == 32) {
+        _pendingMessages.removeAt(0);
+      }
+      _pendingMessages.add(event);
+      return;
+    }
+
+    _dispatchMessage(event);
+  }
+
+  void _dispatchMessage(dynamic event) {
     // Decode json
     dynamic jsonEvent;
     try {

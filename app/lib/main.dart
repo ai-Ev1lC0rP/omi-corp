@@ -76,6 +76,7 @@ import 'package:omi/services/notifications/merge_notification_handler.dart';
 import 'package:omi/services/devices/connectors/limitless_connection.dart';
 import 'package:omi/services/services.dart';
 import 'package:omi/services/wals.dart';
+import 'package:omi/startup/firebase_app_initializer.dart';
 import 'package:omi/utils/debug_log_manager.dart';
 import 'package:omi/utils/debugging/crashlytics_manager.dart';
 import 'package:omi/utils/environment_detector.dart';
@@ -141,22 +142,24 @@ Future _init() async {
   LimitlessDeviceConnection.realtimeSuppressionPolicy = () => SharedPreferencesUtil().batchModeEnabled;
 
   // Firebase
-  if (Firebase.apps.isEmpty) {
-    final profile = Env.profile;
-    final options = switch (profile) {
-      AppEnvironmentProfile.localDev => local.DefaultFirebaseOptions.currentPlatform,
-      AppEnvironmentProfile.selfHosted => self_hosted.DefaultFirebaseOptions.currentPlatform,
-      AppEnvironmentProfile.mobileBeta ||
-      AppEnvironmentProfile.production =>
-        prod.DefaultFirebaseOptions.currentPlatform,
-    };
-    Env.validateFirebaseProject(projectId: options.projectId);
-    await Firebase.initializeApp(options: options);
-  } else {
-    // Firebase may already be initialized by native SDK (macOS)
-    debugPrint('Firebase already initialized.');
-    Env.validateFirebaseProject(projectId: Firebase.app().options.projectId);
-  }
+  final profile = Env.profile;
+  final options = switch (profile) {
+    AppEnvironmentProfile.localDev => local.DefaultFirebaseOptions.currentPlatform,
+    AppEnvironmentProfile.selfHosted => self_hosted.DefaultFirebaseOptions.currentPlatform,
+    AppEnvironmentProfile.mobileBeta || AppEnvironmentProfile.production => prod.DefaultFirebaseOptions.currentPlatform,
+  };
+  Env.validateFirebaseProject(projectId: options.projectId);
+  final firebaseApp = await initializeDefaultFirebaseApp<FirebaseApp>(
+    initialize: () async {
+      if (Firebase.apps.isNotEmpty) {
+        return Firebase.app();
+      }
+      return Firebase.initializeApp(options: options);
+    },
+    existingApp: Firebase.app,
+    errorCode: (error) => error is FirebaseException ? error.code : null,
+  );
+  Env.validateFirebaseProject(projectId: firebaseApp.options.projectId);
 
   if (Env.profile.usesFirebaseAuthEmulator) {
     await FirebaseAuth.instance.useAuthEmulator(

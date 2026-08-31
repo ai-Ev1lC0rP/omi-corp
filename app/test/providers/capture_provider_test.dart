@@ -82,6 +82,21 @@ TranscriptSegment _segment(String id, String text) {
 BtDevice _device({required String id, required DeviceType type, String name = 'TestDevice'}) =>
     BtDevice(id: id, name: name, type: type, rssi: -50);
 
+class _ProcessingCaptureProvider extends CaptureProvider {
+  _ProcessingCaptureProvider({required this.hasRecordingDevice});
+
+  final bool hasRecordingDevice;
+  int stopPhoneMicCalls = 0;
+
+  @override
+  bool get havingRecordingDevice => hasRecordingDevice;
+
+  @override
+  Future stopStreamRecording() async {
+    stopPhoneMicCalls++;
+  }
+}
+
 /// Minimal EnvFields stub so Env-backed code paths (e.g. native BLE stream
 /// config reading Env.apiBaseUrl) don't hit a LateInitializationError.
 class _TestEnvFields implements EnvFields {
@@ -1163,6 +1178,27 @@ void main() {
       // A socket close is the only thing that should end readiness.
       provider.onClosed();
       expect(provider.transcriptServiceReady, isFalse, reason: 'socket close must end transcript readiness');
+      provider.dispose();
+    });
+  });
+
+  group('processing a captured conversation releases phone microphone ownership', () {
+    test('stops the phone microphone even when recording state is interrupted', () async {
+      final provider = _ProcessingCaptureProvider(hasRecordingDevice: false);
+      provider.updateRecordingState(RecordingState.interrupted);
+
+      await provider.stopPhoneMicBeforeProcessing();
+
+      expect(provider.stopPhoneMicCalls, 1);
+      provider.dispose();
+    });
+
+    test('does not stop the phone microphone for a hardware-device capture', () async {
+      final provider = _ProcessingCaptureProvider(hasRecordingDevice: true);
+
+      await provider.stopPhoneMicBeforeProcessing();
+
+      expect(provider.stopPhoneMicCalls, 0);
       provider.dispose();
     });
   });

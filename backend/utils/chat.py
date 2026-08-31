@@ -191,6 +191,62 @@ def _transcribe_voice_message_url(
     return text, detected_language
 
 
+def _transcribe_voice_message_file(
+    path: str,
+    language: str,
+    detect_language: bool = True,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Transcribe one local WAV without requiring cloud object storage."""
+    provider, stt_language, stt_model = get_prerecorded_service(language)
+    is_multi = stt_language == 'multi'
+    try:
+        with open(path, 'rb') as audio_file:
+            audio_bytes = audio_file.read()
+        if is_multi and detect_language:
+            words, detected_language = prerecorded_from_bytes(
+                audio_bytes,
+                diarize=False,
+                language=stt_language,
+                return_language=True,
+                model=stt_model,
+            )
+        else:
+            words = prerecorded_from_bytes(
+                audio_bytes,
+                diarize=False,
+                language=stt_language,
+                return_language=False,
+                model=stt_model,
+            )
+            detected_language = stt_language
+    except Exception as error:
+        failure = failure_from_exception(error, provider=provider)
+        logger.warning(
+            'Voice message transcription failed: outcome=%s provider=%s retryable=%s',
+            failure.outcome.value,
+            failure.provider,
+            failure.retryable,
+        )
+        raise failure from error
+
+    if not words:
+        raise empty_unexpected_failure(provider)
+    try:
+        transcript_segments: List[TranscriptSegment] = postprocess_words(words, 0)
+    except Exception as error:
+        raise TranscriptionFailure(TranscriptionOutcome.UPSTREAM_ERROR, provider=provider) from error
+    del words
+    if not transcript_segments:
+        raise empty_unexpected_failure(provider)
+
+    text = " ".join([segment.text for segment in transcript_segments]).strip()
+    transcript_segments.clear()
+    if len(text) == 0:
+        raise empty_unexpected_failure(provider)
+
+    return text, detected_language
+
+
 def transcribe_voice_message_segment(
     path: str,
     uid: str,
@@ -199,6 +255,12 @@ def transcribe_voice_message_segment(
     if not language:
         language = resolve_voice_message_language(uid, None)
     provider, provider_language, _ = get_prerecorded_service(language)
+    if provider == 'parakeet':
+        if _validated_wav_is_silent(path, provider=provider):
+            detected_language = provider_language if provider_language != 'multi' else None
+            return None, detected_language
+        return _transcribe_voice_message_file(path, language)
+
     # Schedule deletion before the VAD gate as well: silence is a valid
     # terminal outcome, not a reason to retain temporary customer audio.
     url = _prepare_voice_message_url(path)

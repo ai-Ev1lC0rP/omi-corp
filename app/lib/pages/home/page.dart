@@ -819,6 +819,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver, Ticker
               ),
             ),
             GestureDetector(
+              key: const ValueKey('home-chat-voice-button'),
               onTap: () {
                 HapticFeedback.lightImpact();
                 PlatformManager.instance.analytics.bottomNavigationTabClicked('Chat Voice');

@@ -149,6 +149,21 @@ def test_openai_compatible_provider_applies_base_url_headers_and_google_prefix(m
     assert call['temperature'] == 0.7
 
 
+def test_openai_provider_uses_self_hosted_base_url(monkeypatch):
+    FakeChatOpenAI.calls.clear()
+    providers._llm_cache.clear()
+    monkeypatch.setattr(providers, 'ChatOpenAI', FakeChatOpenAI)
+    monkeypatch.setenv('OPENAI_API_KEY', 'local-runtime')
+    monkeypatch.setenv('OPENAI_BASE_URL', 'http://local-llm:11434/v1')
+
+    providers.get_or_create_openai_compatible_llm('openai', 'local-model')
+
+    call = FakeChatOpenAI.calls[-1]
+    assert call['model'] == 'local-model'
+    assert call['api_key'] == 'local-runtime'
+    assert call['base_url'] == 'http://local-llm:11434/v1'
+
+
 def test_unknown_openai_compatible_provider_fails_loudly():
     with pytest.raises(ValueError, match="Unknown OpenAI-compatible provider"):
         providers.get_or_create_openai_compatible_llm('missing-provider', 'some-model')

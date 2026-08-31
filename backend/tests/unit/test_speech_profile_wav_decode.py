@@ -132,3 +132,43 @@ class TestUploadProfileWavDecodeGuard:
         assert exc_info.value.status_code == 400
         mock_vad.assert_not_called()
         mock_upload.assert_not_called()
+
+    def test_onboarding_timer_length_is_accepted(self):
+        fake_file = _fake_upload_file(b"valid wav bytes")
+
+        with patch.object(mod, "os") as mock_os, patch("builtins.open", MagicMock()), patch.object(
+            mod, "AudioSegment"
+        ) as mock_aseg, patch.object(mod, "apply_vad_for_speech_profile"), patch.object(
+            mod, "upload_profile_audio", return_value="https://storage.example.com/profile.wav"
+        ), patch.object(
+            mod, "extract_embedding", side_effect=Exception("not needed")
+        ), patch.object(
+            mod, "set_speech_profile_duration"
+        ), patch.object(
+            mod, "av"
+        ) as mock_av:
+            mock_os.makedirs.return_value = None
+            mock_audio = MagicMock(frame_rate=16000, duration_seconds=150.0)
+            mock_aseg.from_wav.return_value = mock_audio
+            mock_container = MagicMock(duration=150)
+            mock_av.open.return_value.__enter__.return_value = mock_container
+            mock_av.time_base = 1
+
+            result = mod.upload_profile(fake_file, uid="test-uid")
+
+        assert result == {"url": "https://storage.example.com/profile.wav"}
+
+    def test_recording_beyond_onboarding_grace_is_rejected(self):
+        fake_file = _fake_upload_file(b"valid wav bytes")
+
+        with patch.object(mod, "os") as mock_os, patch("builtins.open", MagicMock()), patch.object(
+            mod, "AudioSegment"
+        ) as mock_aseg, patch.object(mod, "apply_vad_for_speech_profile") as mock_vad:
+            mock_os.makedirs.return_value = None
+            mock_aseg.from_wav.return_value = MagicMock(frame_rate=16000, duration_seconds=156.0)
+
+            with pytest.raises(HTTPException) as exc_info:
+                mod.upload_profile(fake_file, uid="test-uid")
+
+        assert exc_info.value.status_code == 400
+        mock_vad.assert_not_called()

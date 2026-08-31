@@ -39,6 +39,27 @@ class TestGetUserHasSpeechProfile:
         with patch.object(storage_mod, "_get_speech_profiles_bucket", return_value=None):
             assert storage_mod.get_user_has_speech_profile("uid1") is False
 
+    def test_local_storage_upload_and_read(self, monkeypatch, tmp_path):
+        source = tmp_path / 'source.wav'
+        source.write_bytes(b'profile audio')
+        storage_dir = tmp_path / 'profiles'
+        monkeypatch.setenv('SPEECH_PROFILE_LOCAL_STORAGE_DIR', str(storage_dir))
+
+        url = storage_mod.upload_profile_audio(str(source), '../external-uid')
+
+        assert url == '/v4/speech-profile/audio'
+        assert storage_mod.get_user_has_speech_profile('../external-uid') is True
+        stored_path = storage_mod.get_profile_audio_if_exists('../external-uid')
+        assert stored_path is not None
+        assert Path(stored_path).read_bytes() == b'profile audio'
+        assert Path(stored_path).is_relative_to(storage_dir)
+
+    def test_local_storage_missing_profile(self, monkeypatch, tmp_path):
+        monkeypatch.setenv('SPEECH_PROFILE_LOCAL_STORAGE_DIR', str(tmp_path / 'profiles'))
+
+        assert storage_mod.get_user_has_speech_profile('missing-uid') is False
+        assert storage_mod.get_profile_audio_if_exists('missing-uid') is None
+
     def test_no_age_parameter_in_signature(self):
         """Guard against reintroducing an expiry knob on the existence check."""
         params = inspect.signature(storage_mod.get_user_has_speech_profile).parameters

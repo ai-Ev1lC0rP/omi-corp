@@ -103,8 +103,11 @@ def get_or_create_openai_compatible_llm(
         api_key = os.environ.get(provider_config.api_key_env)
         if api_key:
             kwargs['api_key'] = api_key
-        if provider_config.base_url:
-            kwargs['base_url'] = provider_config.base_url
+        base_url = options.get('base_url') or (
+            os.environ.get('OPENAI_BASE_URL') if provider == 'openai' else provider_config.base_url
+        )
+        if base_url:
+            kwargs['base_url'] = base_url
         if provider_config.default_headers:
             kwargs['default_headers'] = provider_config.default_headers
         if options.get('extra_body'):

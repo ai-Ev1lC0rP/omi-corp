@@ -446,6 +446,60 @@ async def test_gateway_agent_uses_openai_tools_and_continues_after_tool_call(age
     assert [tool['function']['name'] for tool in gateway_model.bind_kwargs['tools']] == ['lookup']
 
 
+async def test_self_hosted_agent_executes_text_encoded_tool_call_without_showing_json(agentic_mod, monkeypatch):
+    class LocalChatModel:
+        def __init__(self):
+            self.calls = []
+            self.streams = [
+                [
+                    types.SimpleNamespace(
+                        content=(
+                            '{"type":"function","name":"lookup","parameters":{"query":"omi"}}'
+                            '\n\npremature answer without the tool result'
+                        ),
+                        tool_call_chunks=[],
+                    )
+                ],
+                [types.SimpleNamespace(content='local answer', tool_call_chunks=[])],
+            ]
+
+        def bind(self, **_kwargs):
+            return self
+
+        async def astream(self, messages):
+            self.calls.append(messages)
+            for chunk in self.streams.pop(0):
+                yield chunk
+
+    local_model = LocalChatModel()
+    monkeypatch.setenv('SELF_HOSTED_LLM_MODEL', 'local-test-model')
+    monkeypatch.setattr(agentic_mod, 'get_llm', lambda *args, **kwargs: local_model)
+
+    safety_guard = MagicMock()
+    safety_guard.should_warn_user.return_value = None
+    safety_guard.get_stats.return_value = {}
+    callback = agentic_mod.AsyncStreamingCallback()
+    full_response = []
+
+    with patch.object(agentic_mod, '_execute_tool', new=AsyncMock(return_value='tool result')):
+        result = await agentic_mod._run_openai_agent_stream(
+            'SYSTEM',
+            [{'role': 'user', 'content': 'question'}],
+            [],
+            {'lookup': MagicMock()},
+            callback,
+            full_response,
+            safety_guard,
+            {'user_id': 'user-1'},
+        )
+
+    assert result is None
+    assert ''.join(full_response) == 'local answer'
+    assert len(local_model.calls) == 2
+    assert local_model.calls[1][-2]['tool_calls'][0]['function']['name'] == 'lookup'
+    assert local_model.calls[1][-1]['content'] == 'tool result'
+
+
 def test_gateway_tool_conversion_drops_anthropic_server_tools(agentic_mod):
     converted = agentic_mod._convert_anthropic_tools_to_openai(
         [
@@ -517,6 +571,57 @@ async def test_gateway_mode_selects_openai_agent_runner(agentic_mod):
     assert '<url_fetching_instructions>' in seen['system']
     assert seen['messages'] == [{'role': 'user', 'content': 'hello'}]
     assert [schema['function']['name'] for schema in seen['schemas']] == ['perplexity_web_search_tool']
+
+
+async def test_direct_openai_provider_selects_openai_agent_runner(agentic_mod):
+    callback_data = {}
+    seen = {'openai': False}
+
+    async def fake_run_blocking(_executor, function, *_args, **_kwargs):
+        if function is agentic_mod.get_user_timezone:
+            return 'UTC'
+        if function is agentic_mod._get_agentic_qa_prompt:
+            return 'SYSTEM'
+        if function is agentic_mod.load_app_tools:
+            return []
+        raise AssertionError(f'unexpected blocking setup call: {function}')
+
+    async def openai_runner(_system, _messages, _schemas, _registry, callback, full_response, _guard, _configurable):
+        seen['openai'] = True
+        full_response.append('local answer')
+        await callback.put_data('local answer')
+        await callback.end()
+        return None
+
+    async def anthropic_runner(*_args):
+        raise AssertionError('an OpenAI-compatible local model selected the Anthropic runner')
+
+    with patch.object(agentic_mod, 'should_route_chat_agent_through_gateway', return_value=False), patch.object(
+        agentic_mod, 'get_provider', return_value='openai'
+    ), patch.object(agentic_mod, 'run_blocking', new=fake_run_blocking), patch.object(
+        agentic_mod, '_convert_tools', return_value=([], {})
+    ), patch.object(
+        agentic_mod, '_messages_to_anthropic', return_value=[{'role': 'user', 'content': 'hello'}]
+    ), patch.object(
+        agentic_mod, '_inject_current_datetime', side_effect=lambda messages, _block: messages
+    ), patch.object(
+        agentic_mod, '_run_openai_agent_stream', new=openai_runner
+    ), patch.object(
+        agentic_mod, '_run_anthropic_agent_stream', new=anthropic_runner
+    ):
+        chunks = [
+            chunk
+            async for chunk in agentic_mod.execute_agentic_chat_stream(
+                'uid_test',
+                [_chat_message('hello')],
+                callback_data=callback_data,
+                current_datetime_block='<current_datetime/>',
+            )
+        ]
+
+    assert chunks == [f'think: {agentic_mod.AGENT_STREAM_SETUP_PROGRESS}', 'data: local answer', None]
+    assert callback_data['answer'] == 'local answer'
+    assert seen['openai'] is True
 
 
 async def test_anthropic_byok_keeps_agentic_chat_on_direct_runner(agentic_mod):

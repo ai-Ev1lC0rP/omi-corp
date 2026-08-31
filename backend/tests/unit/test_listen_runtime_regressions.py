@@ -219,10 +219,12 @@ async def test_bootstrap_forces_single_language_before_selecting_stt_for_onboard
     monkeypatch.setattr(runtime_module, 'FAIR_USE_ENABLED', False)
     monkeypatch.setattr(runtime_module, 'should_load_speech_profile', lambda **_kwargs: False)
     monkeypatch.setattr(runtime_module, 'should_enable_speaker_identification', lambda **_kwargs: False)
-    monkeypatch.setattr(runtime_module, 'OnboardingHandler', lambda *_args: SimpleNamespace())
+    onboarding_handler = SimpleNamespace(send_current_question=AsyncMock())
+    monkeypatch.setattr(runtime_module, 'OnboardingHandler', lambda *_args: onboarding_handler)
 
     assert await runtime._bootstrap() is True
     assert selected_multi_language_options == [('es', False, None)]
+    onboarding_handler.send_current_question.assert_awaited_once_with()
 
 
 @pytest.mark.anyio

@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import struct
 import threading
 import time
@@ -91,6 +92,22 @@ desktop_updates_bucket = os.getenv('BUCKET_DESKTOP_UPDATES')
 _did_warn_missing_speech_profiles_bucket = False
 
 
+def _get_local_speech_profiles_dir() -> Optional[str]:
+    path = (os.getenv('SPEECH_PROFILE_LOCAL_STORAGE_DIR') or '').strip()
+    return os.path.abspath(path) if path else None
+
+
+def _get_local_speech_profile_path(uid: str) -> Optional[str]:
+    storage_dir = _get_local_speech_profiles_dir()
+    if storage_dir is None:
+        return None
+
+    # Firebase UIDs are external identifiers. Hash them before using them as a
+    # directory name so no UID can escape the configured storage root.
+    uid_dir = hashlib.sha256(uid.encode('utf-8')).hexdigest()
+    return os.path.join(storage_dir, uid_dir, 'speech_profile.wav')
+
+
 def _get_opuslib() -> Any:
     if opuslib is None:
         raise RuntimeError(
@@ -120,6 +137,14 @@ def _get_speech_profiles_bucket(required: bool = False) -> Optional[Any]:
 # ************* SPEECH PROFILE **************
 # *******************************************
 def upload_profile_audio(file_path: str, uid: str) -> str:
+    local_path = _get_local_speech_profile_path(uid)
+    if local_path is not None:
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        temporary_path = f'{local_path}.uploading'
+        shutil.copyfile(file_path, temporary_path)
+        os.replace(temporary_path, local_path)
+        return '/v4/speech-profile/audio'
+
     bucket = _get_speech_profiles_bucket(required=True)
     assert bucket is not None  # required=True raises if missing
     path = f'{uid}/speech_profile.wav'
@@ -132,6 +157,10 @@ def get_user_has_speech_profile(uid: str) -> bool:
     # No age cutoff: the listen pipeline (routers/transcribe.py) uses the profile
     # regardless of age, so reporting an old profile as absent only causes the app
     # to re-prompt users whose profile is still in active use (#5128).
+    local_path = _get_local_speech_profile_path(uid)
+    if local_path is not None:
+        return os.path.isfile(local_path)
+
     bucket = _get_speech_profiles_bucket()
     if bucket is None:
         return False
@@ -140,6 +169,12 @@ def get_user_has_speech_profile(uid: str) -> bool:
 
 
 def get_profile_audio_if_exists(uid: str, download: bool = True) -> Optional[str]:
+    local_path = _get_local_speech_profile_path(uid)
+    if local_path is not None:
+        if not os.path.isfile(local_path):
+            return None
+        return local_path if download else '/v4/speech-profile/audio'
+
     bucket = _get_speech_profiles_bucket()
     if bucket is None:
         return None

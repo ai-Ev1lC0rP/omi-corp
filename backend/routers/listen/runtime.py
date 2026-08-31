@@ -350,6 +350,7 @@ class ListenSessionRuntime:
                     await request.websocket.send_json(event)
 
             self.onboarding_handler = OnboardingHandler(request.uid, send_onboarding, self.transcripts.enqueue)
+            await self.onboarding_handler.send_current_question()
         return True
 
     async def _send_ping(self) -> bool:

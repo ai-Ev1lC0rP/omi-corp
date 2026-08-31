@@ -114,14 +114,19 @@ if _active_profile_name not in MODEL_QOS_PROFILES:
     _active_profile_name = 'premium'
 _active_profile = MODEL_QOS_PROFILES[_active_profile_name]
 
+_self_hosted_llm_model = os.environ.get('SELF_HOSTED_LLM_MODEL', '').strip()
+if _self_hosted_llm_model:
+    _active_profile = {feature: (_self_hosted_llm_model, 'openai') for feature in _active_profile}
+    _PINNED_FEATURES.update({feature: (_self_hosted_llm_model, 'openai') for feature in _PINNED_FEATURES})
+
 # BYOK QoS — all BYOK users get routed to 'byok' profile (top-tier all-OpenAI).
 # BYOK users pay their own API costs, so we give them maximum quality models.
 _byok_profile_name = 'byok'
 _byok_profile = MODEL_QOS_PROFILES[_byok_profile_name]
 
 # Features that can't go through get_llm() (non-ChatOpenAI providers).
-_ANTHROPIC_ONLY_FEATURES = {'chat_agent'}
-_PERPLEXITY_ONLY_FEATURES = {'web_search'}
+_ANTHROPIC_ONLY_FEATURES = set() if _self_hosted_llm_model else {'chat_agent'}
+_PERPLEXITY_ONLY_FEATURES = set() if _self_hosted_llm_model else {'web_search'}
 
 
 # Feature-specific client config (temperature, headers — orthogonal to model choice).
@@ -155,7 +160,7 @@ _STRUCTURED_OUTPUT_FEATURES = {
 }
 STRUCTURED_OUTPUT_FEATURES = _STRUCTURED_OUTPUT_FEATURES
 
-_DEFAULT_CONFIG: Tuple[str, str] = ('gpt-5.6-luna', 'openai')
+_DEFAULT_CONFIG: Tuple[str, str] = ((_self_hosted_llm_model or 'gpt-5.6-luna'), 'openai')
 DEFAULT_CONFIG = _DEFAULT_CONFIG
 
 # Future migration point for features that should call the gateway via an auto

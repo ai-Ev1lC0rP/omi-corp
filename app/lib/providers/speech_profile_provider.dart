@@ -353,6 +353,8 @@ class SpeechProfileProvider extends ChangeNotifier
   }
 
   _validateSingleSpeaker() {
+    if (usePhoneMic) return;
+
     // Filter out Omi question segments for speaker validation
     final userSegments = segments.where((e) => e.speakerId != omiSpeakerId).toList();
 

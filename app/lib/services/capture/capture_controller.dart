@@ -1449,6 +1449,14 @@ class CaptureController extends ChangeNotifier
     await _socket?.stop(reason: 'stop stream recording');
   }
 
+  /// Release the phone microphone before turning the current transcript into a
+  /// conversation. The capture can be interrupted or still initialising when
+  /// the user presses Process Now, so recordingState alone is not authoritative.
+  Future<void> stopPhoneMicBeforeProcessing() async {
+    if (havingRecordingDevice) return;
+    await stopStreamRecording();
+  }
+
   /// Start a phone-mic Transcribe Later (batch) session. Native opus-encodes and
   /// writes WAL-compatible .bin files; no socket, WAL, or AudioSource is used
   /// (_activeSource stays null). [auto] selects the file marker: false = explicit

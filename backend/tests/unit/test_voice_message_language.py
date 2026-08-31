@@ -4,7 +4,7 @@ Unit tests for voice message language resolution.
 
 import os
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -180,6 +180,47 @@ def test_silent_voice_message_still_schedules_temporary_audio_cleanup(chat, monk
     assert chat.transcribe_voice_message_segment("audio.wav", "uid", "en") == (None, "en")
     sign.assert_called_once_with("audio.wav")
     schedule_cleanup.assert_called_once_with("audio.wav")
+
+
+def test_parakeet_voice_message_uses_local_wav_without_cloud_staging(chat, monkeypatch, tmp_path):
+    audio_bytes = b"RIFF-local-parakeet-audio"
+    audio_path = tmp_path / "voice-message.wav"
+    audio_path.write_bytes(audio_bytes)
+    transcribe = MagicMock(
+        return_value=[
+            {
+                "timestamp": [0.0, 1.0],
+                "speaker": "SPEAKER_00",
+                "text": "What do you know about me?",
+            }
+        ]
+    )
+
+    monkeypatch.setattr(chat, "get_prerecorded_service", lambda language: ("parakeet", "en", "parakeet"))
+    monkeypatch.setattr(chat, "_validated_wav_is_silent", lambda path, provider: False)
+    monkeypatch.setattr(
+        chat,
+        "_prepare_voice_message_url",
+        lambda path: (_ for _ in ()).throw(AssertionError("local Parakeet must not use cloud staging")),
+    )
+    monkeypatch.setattr(chat, "prerecorded_from_bytes", transcribe)
+    monkeypatch.setattr(
+        chat,
+        "postprocess_words",
+        lambda words, start: [SimpleNamespace(text="What do you know about me?")],
+    )
+
+    assert chat.transcribe_voice_message_segment(str(audio_path), "uid", "en") == (
+        "What do you know about me?",
+        "en",
+    )
+    transcribe.assert_called_once_with(
+        audio_bytes,
+        diarize=False,
+        language="en",
+        return_language=False,
+        model="parakeet",
+    )
 
 
 @pytest.mark.asyncio

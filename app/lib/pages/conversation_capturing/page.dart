@@ -16,7 +16,6 @@ import 'package:omi/pages/conversation_detail/widgets/name_speaker_sheet.dart';
 import 'package:omi/providers/capture_provider.dart';
 import 'package:omi/providers/connectivity_provider.dart';
 import 'package:omi/providers/device_provider.dart';
-import 'package:omi/utils/enums.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/services/wals/wal.dart';
 import 'package:omi/widgets/confirmation_dialog.dart';
@@ -119,10 +118,7 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
     if (provider.segments.isNotEmpty || provider.photos.isNotEmpty) {
       // Helper function to stop recording and process conversation
       Future<void> stopRecordingAndProcess() async {
-        // Stop any active recording (phone mic)
-        if (provider.recordingState == RecordingState.record) {
-          await provider.stopStreamRecording();
-        }
+        await provider.stopPhoneMicBeforeProcessing();
         // Then process the conversation
         provider.forceProcessingCurrentConversation();
       }
