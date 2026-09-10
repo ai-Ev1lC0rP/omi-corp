@@ -13,7 +13,7 @@ concurrency:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     outputs:
       diff_base: ${{ steps.changes.outputs.diff_base }}
       has_backend_runtime_env: ${{ steps.changes.outputs.has_backend_runtime_env }}
@@ -29,7 +29,7 @@ jobs:
 
   static-contracts:
     name: Static Contracts
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     needs: changes
     if: needs.changes.outputs.has_backend_runtime_env == 'true'
     steps:
