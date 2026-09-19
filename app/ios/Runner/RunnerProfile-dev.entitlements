@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>aps-environment</key>
-	<string>Devdevelopment</string>
+	<string>development</string>
 	<key>com.apple.developer.applesignin</key>
 	<array>
 		<string>Default</string>
@@ -23,7 +23,7 @@
 	<array/>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.friend-app-with-wearable.ios12</string>
+		<string>group.com.casonclark.omi</string>
 	</array>
 </dict>
 </plist>

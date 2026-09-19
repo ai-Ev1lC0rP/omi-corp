@@ -31,8 +31,8 @@ class RayBanDatXcodeGraphTest < Minitest::Test
   }.freeze
   COCOAPODS_FALLBACK_CONFIGS = %w[Debug Profile Release].freeze
 
-  TEAM = '9536L8KLMP'
-  BUNDLE_ID = 'com.friend-app-with-wearable.ios12.development'
+  TEAM = 'GDR5M938K2'
+  BUNDLE_ID = 'com.casonclark.omi.dev'
   PACKAGE_URL = 'https://github.com/facebook/meta-wearables-dat-ios'
   PACKAGE_VERSION = '0.8.0'
   PACKAGE_REVISION = '2e30f1253ab76ee3c448a29dce39114ab09763c3'
