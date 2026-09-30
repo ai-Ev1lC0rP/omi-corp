@@ -219,7 +219,7 @@ workflows:
           failure: true
       app_store_connect:
         auth: integration
-        submit_to_testflight: true
+        submit_to_testflight: false  # internal group only; external beta review needs ASC test info
         beta_groups:
           - Internal
         submit_to_app_store: false
