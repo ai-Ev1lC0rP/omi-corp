@@ -17,6 +17,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
+from config.local_llm import LOCAL_LLM_PROVIDER, local_llm_settings
 from utils.llm.gateway_client import GatewayContextChatOpenAI, get_llm_gateway_base_url, get_llm_gateway_service_token
 from utils.llm.gateway_resilience import gateway_transport_timeout
 from utils.llm.usage_tracker import get_usage_callback
@@ -50,6 +51,8 @@ OPENAI_COMPATIBLE_PROVIDERS: Dict[str, OpenAICompatibleProviderConfig] = {
         default_headers={"X-Title": "Omi Chat"},
         prefix_google_models=True,
     ),
+    # Self-hosted endpoint; base URL and key resolve from config.local_llm at construction.
+    LOCAL_LLM_PROVIDER: OpenAICompatibleProviderConfig(name=LOCAL_LLM_PROVIDER, api_key_env='LLM_API_KEY'),
 }
 
 _llm_cache: Dict[tuple, Any] = {}
@@ -107,6 +110,10 @@ def get_or_create_openai_compatible_llm(
             kwargs['base_url'] = provider_config.base_url
         if provider_config.default_headers:
             kwargs['default_headers'] = provider_config.default_headers
+        local = local_llm_settings() if provider == LOCAL_LLM_PROVIDER else None
+        if local is not None:
+            kwargs['base_url'] = local.base_url
+            kwargs['api_key'] = SecretStr(local.api_key)
         if options.get('extra_body'):
             kwargs['extra_body'] = options['extra_body']
         if 'temperature' in options:

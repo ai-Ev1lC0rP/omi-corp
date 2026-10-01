@@ -31,6 +31,7 @@ from database.vector_db import (
 )
 from utils.llm.memories import resolve_memory_conflict
 from database.apps import record_app_usage, get_omi_personas_by_uid_db, get_app_by_id_db
+import database.vector_db as vector_db
 from database.vector_db import upsert_vector2, update_vector_metadata, upsert_transcript_chunk_vectors
 from utils.conversations.transcript_chunks import build_transcript_chunks
 from models.app import App, UsageHistoryType
@@ -1400,6 +1401,8 @@ def save_transcript_chunk_vectors(uid: str, conversation: Conversation):
 
 
 def save_structured_vector(uid: str, conversation: Conversation, update_only: bool = False) -> None:
+    if vector_db.index is None:  # no vector store configured: skip the embedding and metadata LLM work
+        return
     vector = generate_embedding(str(conversation.structured)) if not update_only else None
     tz = notification_db.get_user_time_zone(uid) or ''
 

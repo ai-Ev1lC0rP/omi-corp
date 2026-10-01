@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass
 from typing import Dict, Tuple, Union
 
+from config.local_llm import LOCAL_LLM_PROVIDER, OVERRIDABLE_PROVIDERS, local_llm_settings
 from utils.llm.gateway_client import is_auto_lane_id
 
 logger = logging.getLogger(__name__)
@@ -170,8 +171,14 @@ def _get_model_config(feature: str) -> Tuple[str, str]:
     Resolution order: pinned > active profile > fallback.
     """
     if feature in _PINNED_FEATURES:
-        return _PINNED_FEATURES[feature]
-    return _active_profile.get(feature, _DEFAULT_CONFIG)
+        model, provider = _PINNED_FEATURES[feature]
+    else:
+        model, provider = _active_profile.get(feature, _DEFAULT_CONFIG)
+    local = local_llm_settings()
+    if local is not None and provider in OVERRIDABLE_PROVIDERS:
+        # Self-hosted OpenAI-compatible endpoint replaces every ChatOpenAI-routable route.
+        return local.model_for(model), LOCAL_LLM_PROVIDER
+    return model, provider
 
 
 def get_model_config(feature: str) -> Tuple[str, str]:
@@ -215,6 +222,10 @@ def get_route_options(feature: str, model: str, provider: str) -> Dict[str, obje
         temperature = _OPENROUTER_TEMPERATURES.get(feature)
         if temperature is not None:
             options['temperature'] = temperature
+    if provider == LOCAL_LLM_PROVIDER:
+        local = local_llm_settings()
+        if local is not None and local.reasoning_effort:
+            options['extra_body'] = {'reasoning_effort': local.reasoning_effort}
     if provider == 'gemini' and not is_structured_output_feature(feature):
         # Structured-output features use .with_structured_output(), which routes through
         # Completions.parse() and rejects thinking_budget (issue #7898).

@@ -76,6 +76,7 @@ from .receiver import ListenReceiver
 from .speakers import SpeakerMatcher
 from .transcripts import TranscriptProcessor
 from utils.listen_audio import build_channel_config
+from utils.listen_inprocess_finalization import is_inprocess_finalization_enabled, make_inprocess_conversation_processor
 
 logger = logging.getLogger(__name__)
 
@@ -529,6 +530,10 @@ class ListenSessionRuntime:
 
     async def _start_pusher(self) -> None:
         if not PUSHER_ENABLED:
+            if is_inprocess_finalization_enabled():
+                self.request_conversation_processing = make_inprocess_conversation_processor(
+                    self.request.uid, self.language, get_byok_keys, self.conversations.on_conversation_processed
+                )
             return
         audio_bytes_enabled = (
             bool(await self.persistence.call(get_audio_bytes_webhook_seconds, self.request.uid))
