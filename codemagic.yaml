@@ -229,9 +229,10 @@ workflows:
           failure: true
       app_store_connect:
         auth: integration
-        submit_to_testflight: false  # internal group only; external beta review needs ASC test info
-        beta_groups:
-          - Internal
+        # ASC Automatic Distribution on Internal covers TestFlight after upload+processing.
+        # Do not call the Internal-group API (it fails); do not enable submit_to_testflight
+        # (needs external beta review / test info that this ASC app does not have).
+        submit_to_testflight: false
         submit_to_app_store: false
 
   android-internal-auto:
