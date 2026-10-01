@@ -93,6 +93,44 @@ class MobileProductionRoutingContractTests(unittest.TestCase):
                     (root / "codemagic.yaml").write_text(original.replace(block, changed, 1), encoding="utf-8")
                     self.assertTrue(CHECKER.validate(root))
 
+    def test_personal_workflows_are_not_production_family(self) -> None:
+        self.assertTrue(set(CHECKER.PERSONAL_WORKFLOWS).isdisjoint(CHECKER.WORKFLOWS))
+
+    def test_personal_workflow_rejects_production_routing_or_identity_drift(self) -> None:
+        original = (ROOT / "codemagic.yaml").read_text(encoding="utf-8")
+        assignment = f"echo API_BASE_URL={CHECKER.PERSONAL_API_BASE_URL_ASSIGNMENT} >> .env"
+        for workflow, bundle_identifier in CHECKER.PERSONAL_WORKFLOWS.items():
+            block = CHECKER._workflow_block(original, workflow)
+            self.assertIsNotNone(block)
+            assert block is not None
+            mutations = {
+                "missing assignment": block.replace(assignment + "\n", "", 1),
+                "hardcoded production api": block.replace(assignment, "echo API_BASE_URL=https://api.omi.me/ >> .env", 1),
+                "hardcoded arbitrary api": block.replace(
+                    assignment, "echo API_BASE_URL=https://staging.example.test/ >> .env", 1
+                ),
+                "conflicting assignment": block.replace(
+                    assignment, assignment + "\n          echo API_BASE_URL=https://api.omi.me/ >> .env", 1
+                ),
+                "missing personal profile": block.replace("--dart-define=OMI_APP_PROFILE=personal \\\n", "", 1),
+                "production profile": block.replace(
+                    "--dart-define=OMI_APP_PROFILE=personal", "--dart-define=OMI_APP_PROFILE=production", 1
+                ),
+                "missing api define": block.replace("--dart-define=OMI_API_BASE_URL=$API_BASE_URL \\\n", "", 1),
+                "production-family identity": block.replace(
+                    f"--ios-bundle-id={bundle_identifier} ",
+                    "--ios-bundle-id=com.friend-app-with-wearable.ios12 ",
+                    1,
+                ),
+            }
+            for mutation, changed in mutations.items():
+                with self.subTest(workflow=workflow, mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                    self.assertNotEqual(changed, block, mutation)
+                    root = Path(directory)
+                    (root / "codemagic.yaml").write_text(original.replace(block, changed, 1), encoding="utf-8")
+                    errors = CHECKER.validate(root)
+                    self.assertTrue(any(workflow in error for error in errors), (mutation, errors))
+
     def test_desktop_release_rejects_staging_or_duplicate_late_python_api_assignment(self) -> None:
         original = (ROOT / "codemagic.yaml").read_text(encoding="utf-8")
         block = CHECKER._workflow_block(original, CHECKER.DESKTOP_WORKFLOW)

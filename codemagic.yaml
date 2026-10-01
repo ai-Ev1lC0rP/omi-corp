@@ -83,7 +83,7 @@ workflows:
           echo OPENAI_API_KEY=$OPENAI_API_KEY >> .env
           echo INSTABUG_API_KEY=$INSTABUG_API_KEY >> .env
           echo ONESIGNAL_APP_ID=$ONESIGNAL_APP_ID >> .env
-          echo API_BASE_URL=https://api.omi.me/ >> .env
+          echo API_BASE_URL=${API_BASE_URL:?Codemagic app_env must set API_BASE_URL} >> .env
           echo GROWTHBOOK_API_KEY=$GROWTHBOOK_API_KEY >> .env
           echo GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY >> .env
           echo INTERCOM_APP_ID=$INTERCOM_APP_ID >> .env
@@ -99,6 +99,14 @@ workflows:
       - name: Generate iOS Custom Config (Custom.xcconfig)
         script: |
           sh scripts/generate_ios_custom_config.sh ios/Config/Prod/GoogleService-Info.plist ios/Flutter/
+
+      - name: Verify Google Sign-In URL scheme
+        script: |
+          if ! grep -Eq '^GOOGLE_REVERSE_CLIENT_ID=com\.googleusercontent\.apps\.[^[:space:]]+$' ios/Flutter/Custom.xcconfig; then
+            echo "GOOGLE_REVERSE_CLIENT_ID is empty in ios/Flutter/Custom.xcconfig." >&2
+            echo "ios/Config/Prod/GoogleService-Info.plist has no REVERSED_CLIENT_ID: enable Google sign-in for the Firebase iOS app and rerun." >&2
+            exit 1
+          fi
 
       - name: Get Flutter packages
         script: |
@@ -180,6 +188,8 @@ workflows:
             --build-name=$BUILD_NAME \
             --build-number=$BUILD_NUMBER \
             --flavor prod \
+            --dart-define=OMI_APP_PROFILE=personal \
+            --dart-define=OMI_API_BASE_URL=$API_BASE_URL \
             --export-options-plist=$HOME/export_options.plist
 
     artifacts:

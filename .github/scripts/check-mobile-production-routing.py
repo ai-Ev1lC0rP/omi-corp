@@ -7,7 +7,6 @@ import re
 from pathlib import Path
 
 WORKFLOWS = (
-    "ios-internal-auto",
     "android-internal-auto",
     "ios-prod-testflight",
     "android-prod-internal",
@@ -15,6 +14,22 @@ WORKFLOWS = (
     "android-prod-patch",
     "macos-prod-appstore",
 )
+# Personal builds are NOT production-family artifacts. INV-DATA-1 allows a
+# separate app identity with its own credentials to use non-production
+# services, provided it never reuses a production-family identity. Each entry
+# pins that separate identity plus the explicit personal routing contract
+# (the `personal` app profile and a CI-provided API host), so the workflow can
+# neither drift back onto the production plane by accident nor impersonate it.
+PERSONAL_WORKFLOWS = {
+    "ios-internal-auto": "com.casonclark.omi",
+}
+PERSONAL_API_BASE_URL_ASSIGNMENT = "${API_BASE_URL:?Codemagic app_env must set API_BASE_URL}"
+PERSONAL_REQUIRED_FRAGMENTS = (
+    "--dart-define=OMI_APP_PROFILE=personal",
+    "--dart-define=OMI_API_BASE_URL=$API_BASE_URL",
+)
+PRODUCTION_FAMILY_IOS_BUNDLE_IDENTIFIER_PREFIX = "com.friend-app-with-wearable."
+OTHER_APP_PROFILE_PATTERN = re.compile(r"OMI_APP_PROFILE=(?!personal\b)")
 DESKTOP_WORKFLOW = "omi-desktop-swift-release"
 PIN = "https://api.omi.me/"
 DESKTOP_PIN = "https://api.omi.me"
@@ -90,6 +105,33 @@ def _retired_gke_desktop_backend_manifests(root: Path) -> list[Path]:
     return retired_manifests
 
 
+def _validate_personal_workflow(workflow: str, bundle_identifier: str, block: str | None) -> list[str]:
+    if block is None:
+        return [f"missing personal workflow {workflow}"]
+    errors: list[str] = []
+    # The fail-fast `${VAR:?message}` expansion contains spaces, so match the full value.
+    assignments = re.findall(r"(?m)^\s*echo API_BASE_URL=(.+?) >> \.env\s*$", block)
+    if assignments != [PERSONAL_API_BASE_URL_ASSIGNMENT]:
+        errors.append(
+            f"{workflow} is a personal build and must contain exactly one "
+            f"API_BASE_URL={PERSONAL_API_BASE_URL_ASSIGNMENT} assignment"
+        )
+    for fragment in PERSONAL_REQUIRED_FRAGMENTS:
+        if block.count(fragment) != 1:
+            errors.append(f"{workflow} is a personal build and must pass {fragment} exactly once")
+    if OTHER_APP_PROFILE_PATTERN.search(block):
+        errors.append(f"{workflow} is a personal build and must not select another OMI_APP_PROFILE")
+    if PIN in block:
+        errors.append(f"{workflow} is a personal build and must not route to the production API {PIN}")
+    bundle_identifiers = re.findall(r"--ios-bundle-id=([^\s\\]+)", block)
+    if bundle_identifier not in bundle_identifiers:
+        errors.append(f"{workflow} is a personal build and must keep its separate iOS identity {bundle_identifier}")
+    for candidate in bundle_identifiers:
+        if candidate.startswith(PRODUCTION_FAMILY_IOS_BUNDLE_IDENTIFIER_PREFIX):
+            errors.append(f"{workflow} is a personal build and must not reuse production-family identity {candidate}")
+    return errors
+
+
 def validate(root: Path) -> list[str]:
     text = (root / "codemagic.yaml").read_text(encoding="utf-8")
     errors: list[str] = []
@@ -104,6 +146,8 @@ def validate(root: Path) -> list[str]:
             errors.append(
                 f"{workflow} must contain exactly one immutable API_BASE_URL=https://api.omi.me/ assignment"
             )
+    for workflow, bundle_identifier in PERSONAL_WORKFLOWS.items():
+        errors.extend(_validate_personal_workflow(workflow, bundle_identifier, _workflow_block(text, workflow)))
     desktop_block = _workflow_block(text, DESKTOP_WORKFLOW)
     desktop_bundle_identifiers = re.findall(
         r"(?m)^\s*BUNDLE_ID:\s*[\"']?([^\"'\s]+)[\"']?\s*$", desktop_block or ""
