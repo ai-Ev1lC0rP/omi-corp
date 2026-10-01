@@ -45,6 +45,16 @@ abstract class Env {
 
   // static String? get apiBaseUrl => 'https://omi-backend.ngrok.app/';
   static String? get apiBaseUrl {
+    final url = _resolvedApiBaseUrl;
+    // Request URLs are built as '${apiBaseUrl}v1/...', so a self-hosted host
+    // supplied without a trailing slash is normalized here.
+    if (url != null && url.isNotEmpty && profile.requiresExplicitApiBaseUrl && !url.endsWith('/')) {
+      return '$url/';
+    }
+    return url;
+  }
+
+  static String? get _resolvedApiBaseUrl {
     if (_apiBaseUrlOverride != null) return _apiBaseUrlOverride;
     if (_apiBaseUrlFromDefine.isNotEmpty) return _apiBaseUrlFromDefine;
     final configuredApiBaseUrl = _instance.apiBaseUrl;
@@ -74,14 +84,18 @@ abstract class Env {
     return servingApiBaseUrl ?? configuredProfile.defaultApiBaseUrl;
   }
 
-  static void validateProfilePairing() {
-    final productionFlavor = F.env == Environment.prod;
-    if (!productionFlavor && profile != AppEnvironmentProfile.localDev) {
+  static void validateProfilePairing({
+    bool? productionFlavor,
+    AppEnvironmentProfile? configuredProfile,
+  }) {
+    final isProductionFlavor = productionFlavor ?? F.env == Environment.prod;
+    final effectiveProfile = configuredProfile ?? profile;
+    if (!isProductionFlavor && effectiveProfile != AppEnvironmentProfile.localDev) {
       throw StateError(
-        'Profile ${profile.name} must be built with the prod flavor.',
+        'Profile ${effectiveProfile.name} must be built with the prod flavor.',
       );
     }
-    if (productionFlavor && profile == AppEnvironmentProfile.localDev) {
+    if (isProductionFlavor && effectiveProfile == AppEnvironmentProfile.localDev) {
       throw StateError('The prod flavor cannot use the local_dev profile.');
     }
   }
@@ -123,6 +137,11 @@ abstract class Env {
       return;
     }
 
+    if (effectiveProfile.requiresExplicitApiBaseUrl) {
+      _validateExplicitApiBaseUrl(effectiveProfile, normalized);
+      return;
+    }
+
     if (normalized != expected) {
       throw StateError(
         'Profile ${effectiveProfile.name} requires API_BASE_URL=${effectiveProfile.defaultApiBaseUrl}',
@@ -139,12 +158,58 @@ abstract class Env {
 
   static void requireProductionRouting() => validateStartupRouting(productionFamily: true);
 
+  /// Based Hardware serving planes. They verify ID tokens against the
+  /// `based-hardware` Firebase project only, so a profile backed by any other
+  /// Firebase project must never route to them.
+  static const _basedHardwareApiHosts = {'api.omi.me', 'api.omiapi.com'};
+
+  static void _validateExplicitApiBaseUrl(AppEnvironmentProfile profile, String normalized) {
+    if (normalized.isEmpty) {
+      throw StateError(
+        'Profile ${profile.name} has no API base URL. Build with '
+        '--dart-define=OMI_API_BASE_URL=https://<your-backend>/ or set API_BASE_URL in .env; '
+        'it never falls back to $productionApiBaseUrl.',
+      );
+    }
+    final uri = Uri.tryParse(normalized);
+    if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http') || uri.host.isEmpty) {
+      throw StateError(
+        'Profile ${profile.name} requires an absolute http(s) API base URL, got "$normalized".',
+      );
+    }
+    final host = uri.host.toLowerCase();
+    if (_basedHardwareApiHosts.contains(host)) {
+      throw StateError(
+        'Profile ${profile.name} cannot use $host: that backend only trusts the based-hardware Firebase project, '
+        'not ${profile.firebaseProjectId}. Point OMI_API_BASE_URL at a backend configured for '
+        '${profile.firebaseProjectId}.',
+      );
+    }
+  }
+
   /// WebSocket URL for the agent proxy service.
   /// Derives from apiBaseUrl: api.omi.me → agent.omi.me, api.omiapi.com → agent.omiapi.com.
   /// Can be overridden via Env.overrideAgentProxyWsUrl() for local testing.
   static String get agentProxyWsUrl {
     if (_agentProxyWsUrlOverride != null) return _agentProxyWsUrlOverride!;
-    return _agentProxyWsUrlFor(apiBaseUrl ?? productionApiBaseUrl);
+    final base = apiBaseUrl ?? productionApiBaseUrl;
+    if (profile.requiresExplicitApiBaseUrl) return selfHostedAgentProxyWsUrlFor(base);
+    return _agentProxyWsUrlFor(base);
+  }
+
+  /// Self-hosted backends (profiles without a built-in API host) serve the
+  /// agent proxy from the API's own origin: `https://h[:p]/` maps to
+  /// `wss://h[:p]/v1/agent/ws` and `http://` maps to `ws://`. Never throws,
+  /// whatever the host looks like; startup validation rejects unusable URLs.
+  static String selfHostedAgentProxyWsUrlFor(String base) {
+    final uri = Uri.tryParse(base.trim());
+    if (uri == null || uri.host.isEmpty) return 'wss:///v1/agent/ws';
+    return Uri(
+      scheme: uri.scheme == 'http' ? 'ws' : 'wss',
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: '/v1/agent/ws',
+    ).toString();
   }
 
   static String _agentProxyWsUrlFor(String base) {

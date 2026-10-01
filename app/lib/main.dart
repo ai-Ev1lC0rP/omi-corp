@@ -36,6 +36,7 @@ import 'package:omi/env/prod_env.dart';
 import 'package:omi/firebase_options_local.dart' as local;
 import 'package:omi/firebase_options_prod.dart' as prod;
 import 'package:omi/flavors.dart';
+import 'package:omi/startup_error_app.dart';
 import 'package:omi/startup_routing.dart';
 import 'package:omi/l10n/app_localizations.dart';
 import 'package:omi/pages/apps/providers/add_app_provider.dart';
@@ -222,6 +223,18 @@ Future _init() async {
   return;
 }
 
+/// Crashlytics needs an initialized default Firebase app; before that (or when
+/// Firebase setup itself is what failed) errors are only logged locally.
+void _reportFatalError(Object error, StackTrace stack, {String? reason}) {
+  debugPrint('${reason ?? 'Uncaught error'}: $error\n$stack');
+  if (Firebase.apps.isEmpty) return;
+  try {
+    FirebaseCrashlytics.instance.recordError(error, stack, fatal: true, reason: reason);
+  } catch (e) {
+    debugPrint('Crashlytics recordError failed: $e');
+  }
+}
+
 void main() {
   runZonedGuarded(() async {
     // Ensure
@@ -230,9 +243,16 @@ void main() {
     } else {
       WidgetsFlutterBinding.ensureInitialized();
     }
-    await _init();
+    try {
+      await _init();
+    } catch (error, stack) {
+      // Never leave the native launch screen up forever: show what failed.
+      _reportFatalError(error, stack, reason: 'Startup failed');
+      runApp(StartupErrorApp(error: error, stackTrace: stack));
+      return;
+    }
     runApp(const MyApp());
-  }, (error, stack) => FirebaseCrashlytics.instance.recordError(error, stack, fatal: true));
+  }, (error, stack) => _reportFatalError(error, stack));
 }
 
 class MyApp extends StatefulWidget {

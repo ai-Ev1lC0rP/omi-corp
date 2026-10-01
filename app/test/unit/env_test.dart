@@ -87,6 +87,20 @@ void main() {
       );
     });
 
+    test('the profile set is pinned', () {
+      expect(
+        AppEnvironmentProfile.values.map((profile) => profile.name).toList(),
+        ['local_dev', 'mobile_beta', 'production', 'personal'],
+      );
+      for (final profile in [
+        AppEnvironmentProfile.localDev,
+        AppEnvironmentProfile.mobileBeta,
+        AppEnvironmentProfile.production,
+      ]) {
+        expect(profile.requiresExplicitApiBaseUrl, isFalse, reason: profile.name);
+      }
+    });
+
     test('flavor defaults map to production and local profiles', () {
       expect(
         AppEnvironmentProfile.forFlavor(productionFlavor: true),
@@ -164,6 +178,154 @@ void main() {
     });
   });
 
+  group('personal profile', () {
+    const personal = AppEnvironmentProfile.personal;
+    const tailnetUrl = 'https://omi.taileb7e4.ts.net/';
+
+    test('pairs the cason-omi Firebase project with a build-provided API host', () {
+      expect(personal.name, 'personal');
+      expect(personal.firebaseProjectId, 'cason-omi');
+      expect(personal.authCallbackScheme, 'omi');
+      expect(personal.usesFirebaseAuthEmulator, isFalse);
+      expect(personal.defaultApiBaseUrl, isEmpty);
+      expect(personal.requiresExplicitApiBaseUrl, isTrue);
+    });
+
+    test('profile pairing requires the prod flavor', () {
+      expect(
+        () => Env.validateProfilePairing(productionFlavor: true, configuredProfile: personal),
+        returnsNormally,
+      );
+      expect(
+        () => Env.validateProfilePairing(productionFlavor: false, configuredProfile: personal),
+        throwsStateError,
+      );
+    });
+
+    test('profile pairing is unchanged for the existing profiles', () {
+      expect(
+        () => Env.validateProfilePairing(
+          productionFlavor: true,
+          configuredProfile: AppEnvironmentProfile.production,
+        ),
+        returnsNormally,
+      );
+      expect(
+        () => Env.validateProfilePairing(
+          productionFlavor: true,
+          configuredProfile: AppEnvironmentProfile.mobileBeta,
+        ),
+        returnsNormally,
+      );
+      expect(
+        () => Env.validateProfilePairing(
+          productionFlavor: false,
+          configuredProfile: AppEnvironmentProfile.localDev,
+        ),
+        returnsNormally,
+      );
+      expect(
+        () => Env.validateProfilePairing(
+          productionFlavor: true,
+          configuredProfile: AppEnvironmentProfile.localDev,
+        ),
+        throwsStateError,
+      );
+      expect(
+        () => Env.validateProfilePairing(
+          productionFlavor: false,
+          configuredProfile: AppEnvironmentProfile.production,
+        ),
+        throwsStateError,
+      );
+    });
+
+    test('accepts only the cason-omi Firebase project', () {
+      expect(
+        () => Env.validateFirebaseProject(projectId: 'cason-omi', configuredProfile: personal),
+        returnsNormally,
+      );
+      expect(
+        () => Env.validateFirebaseProject(projectId: 'based-hardware', configuredProfile: personal),
+        throwsStateError,
+      );
+      expect(
+        () => Env.validateFirebaseProject(
+          projectId: 'cason-omi',
+          configuredProfile: AppEnvironmentProfile.production,
+        ),
+        throwsStateError,
+      );
+    });
+
+    test('startup routing accepts the provided self-hosted API', () {
+      for (final endpoint in [
+        tailnetUrl,
+        'https://omi.taileb7e4.ts.net',
+        'http://100.101.102.103:8000/',
+        'https://api.example.com:8443/',
+      ]) {
+        expect(
+          () => Env.validateStartupRouting(
+            productionFamily: true,
+            configuredProfile: personal,
+            configuredApiBaseUrl: endpoint,
+          ),
+          returnsNormally,
+          reason: endpoint,
+        );
+      }
+    });
+
+    test('startup routing fails clearly when no API host is provided', () {
+      expect(
+        () => Env.validateStartupRouting(
+          productionFamily: true,
+          configuredProfile: personal,
+          configuredApiBaseUrl: '',
+        ),
+        throwsA(
+          isA<StateError>().having((e) => e.message, 'message', contains('--dart-define=OMI_API_BASE_URL')),
+        ),
+      );
+    });
+
+    test('startup routing rejects malformed and Based Hardware hosts', () {
+      for (final endpoint in [
+        'not a url',
+        'ftp://files.example.com/',
+        '/relative/path/',
+        'https://api.omi.me/',
+        'https://API.OMI.ME',
+        'https://api.omiapi.com/',
+      ]) {
+        expect(
+          () => Env.validateStartupRouting(
+            productionFamily: true,
+            configuredProfile: personal,
+            configuredApiBaseUrl: endpoint,
+          ),
+          throwsStateError,
+          reason: endpoint,
+        );
+      }
+    });
+
+    test('OAuth uses the self-hosted serving API', () {
+      expect(Env.authApiBaseUrlForProfile(personal, servingApiBaseUrl: tailnetUrl), tailnetUrl);
+    });
+
+    test('agent WebSocket derivation never throws for arbitrary hosts', () {
+      expect(Env.selfHostedAgentProxyWsUrlFor(tailnetUrl), 'wss://omi.taileb7e4.ts.net/v1/agent/ws');
+      expect(Env.selfHostedAgentProxyWsUrlFor('http://100.101.102.103:8000/'), 'ws://100.101.102.103:8000/v1/agent/ws');
+      expect(Env.selfHostedAgentProxyWsUrlFor('https://api.example.com/'), 'wss://api.example.com/v1/agent/ws');
+      expect(Env.selfHostedAgentProxyWsUrlFor('http://[::1]:8000/'), 'ws://[::1]:8000/v1/agent/ws');
+      for (final garbage in ['', 'not a url', 'http://', '::::', 'https://exa mple.com/']) {
+        expect(() => Env.selfHostedAgentProxyWsUrlFor(garbage), returnsNormally, reason: garbage);
+      }
+    });
+  });
+
   test('main invokes the production startup routing seam before services initialize', () {
     // Static wiring tripwire: the behavioral cases above call the exact seam.
     final mainSource = File('lib/main.dart').readAsStringSync();
@@ -176,5 +338,13 @@ void main() {
       mainSource,
       contains('Env.validateFirebaseProject(projectId: Firebase.app().options.projectId);'),
     );
+  });
+
+  test('main surfaces startup failures instead of stalling on the launch screen', () {
+    final mainSource = File('lib/main.dart').readAsStringSync();
+    expect(mainSource, contains('runApp(StartupErrorApp(error: error, stackTrace: stack));'));
+    // Crashlytics must not be reached before Firebase has a default app.
+    expect(mainSource, contains('if (Firebase.apps.isEmpty) return;'));
+    expect(mainSource, isNot(contains('(error, stack) => FirebaseCrashlytics.instance.recordError(')));
   });
 }

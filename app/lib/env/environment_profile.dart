@@ -27,6 +27,20 @@ enum AppEnvironmentProfile {
     authCallbackScheme: 'omi',
     usesFirebaseAuthEmulator: false,
     allowsProductionData: true,
+  ),
+
+  /// Self-hosted personal build: the `cason-omi` Firebase project paired with
+  /// a backend that trusts it. There is intentionally no default host; the
+  /// serving API must be supplied at build time via
+  /// `--dart-define=OMI_API_BASE_URL=...` or `API_BASE_URL` in `.env`, and
+  /// startup validation fails loudly when it is missing.
+  personal(
+    name: 'personal',
+    defaultApiBaseUrl: '',
+    firebaseProjectId: 'cason-omi',
+    authCallbackScheme: 'omi',
+    usesFirebaseAuthEmulator: false,
+    allowsProductionData: true,
   );
 
   const AppEnvironmentProfile({
@@ -45,6 +59,10 @@ enum AppEnvironmentProfile {
   final bool usesFirebaseAuthEmulator;
   final bool allowsProductionData;
 
+  /// True when the profile has no built-in serving API and the build must
+  /// provide one explicitly (never falls back to a Based Hardware host).
+  bool get requiresExplicitApiBaseUrl => defaultApiBaseUrl.isEmpty;
+
   static AppEnvironmentProfile forFlavor({required bool productionFlavor}) {
     const requested = String.fromEnvironment('OMI_APP_PROFILE');
     if (requested.isEmpty) {
@@ -55,7 +73,7 @@ enum AppEnvironmentProfile {
       (profile) => profile.name == requested,
       orElse: () => throw StateError(
         'Unknown OMI_APP_PROFILE "$requested". '
-        'Use local_dev, mobile_beta, or production.',
+        'Use local_dev, mobile_beta, production, or personal.',
       ),
     );
   }
