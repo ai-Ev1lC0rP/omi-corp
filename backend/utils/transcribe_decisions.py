@@ -73,6 +73,19 @@ def should_include_speech_profile(include_speech_profile: bool, is_multi_channel
     return include_speech_profile
 
 
+def client_codec_for_source(codec: str, source: Optional[str]) -> str:
+    """Correct a codec label the client is known to get wrong for its audio source.
+
+    Apple Watch audio is always 16 kHz signed 16-bit PCM, but the app labels the stream
+    ``pcm8`` whenever its watch connection handle is momentarily unavailable (the codec
+    lookup falls back to ``pcm8``). Decoding that as 8-bit turns every byte into a sample
+    and speech into noise.
+    """
+    if codec == 'pcm8' and source == 'apple_watch':
+        return 'pcm16'
+    return codec
+
+
 def normalize_codec_frame(codec: str) -> CodecFrameDecision:
     """Map a client codec parameter onto the decoder to build.
 

@@ -48,8 +48,10 @@ from utils.onboarding import OnboardingHandler
 from utils.observability.transcription import LiveSTTAttempt
 from utils.pusher import PusherCircuitBreakerOpen
 from utils.stt.streaming import get_stt_service_for_language
+from utils.stt.whisper_gradio import whisper_gradio_live_selection
 from utils.subscription import get_remaining_transcription_seconds, is_trial_paywalled
 from utils.transcribe_decisions import (
+    client_codec_for_source,
     effective_conversation_timeout,
     normalize_codec_frame,
     normalize_language,
@@ -270,7 +272,9 @@ class ListenSessionRuntime:
             request.onboarding_mode,
             base.transcription_prefs.get('single_language_mode', False),
         )
-        self.stt_service, self.stt_language, self.stt_model = get_stt_service_for_language(
+        self.stt_service, self.stt_language, self.stt_model = whisper_gradio_live_selection(
+            self.language
+        ) or get_stt_service_for_language(
             self.language,
             multi_lang_enabled=not single_language_mode,
             preferred_service=request.stt_service,
@@ -325,7 +329,10 @@ class ListenSessionRuntime:
         self.conversation_creation_timeout = effective_conversation_timeout(
             request.conversation_timeout, self.is_multi_channel
         )
-        decision = normalize_codec_frame(request.codec)
+        client_codec = client_codec_for_source(request.codec, request.source)
+        if client_codec != request.codec:
+            logger.info('Listen codec corrected source=%s %s->%s', request.source, request.codec, client_codec)
+        decision = normalize_codec_frame(client_codec)
         self.request = replace(request, codec=decision.codec)
         self.lc3_frame_duration_us = decision.lc3_frame_duration_us
         self._build_components()

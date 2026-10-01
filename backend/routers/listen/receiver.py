@@ -53,6 +53,7 @@ from utils.stt.streaming import (
     process_audio_modulate,
     process_audio_parakeet,
 )
+from utils.stt.whisper_gradio import process_audio_whisper_gradio
 from utils.stt.vad_gate import GatedSTTSocket, VADStreamingGate, VAD_GATE_MODE, is_gate_enabled
 from utils.transcribe_decisions import (
     TARGET_SAMPLE_RATE,
@@ -180,6 +181,8 @@ class ListenReceiver:
             if actual_service == STTService.modulate:
                 self.host.stt_model = 'velma-2'
             return socket
+        if self.host.stt_service == STTService.whisper_gradio:
+            return await process_audio_whisper_gradio(callback, sample_rate)
         if self.host.stt_service == STTService.modulate:
             return await process_audio_modulate(modulate_callback or callback, sample_rate, self.host.stt_language)
         if self.host.stt_service == STTService.deepgram:

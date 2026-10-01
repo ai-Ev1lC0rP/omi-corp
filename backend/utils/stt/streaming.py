@@ -50,6 +50,7 @@ class STTService(str, Enum):
     deepgram = "deepgram"
     modulate = "modulate"
     parakeet = "parakeet"
+    whisper_gradio = "whisper_gradio"  # self-hosted Whisper-WebUI; see utils/stt/whisper_gradio.py
 
     @staticmethod
     def get_model_name(value: 'STTService') -> Optional[str]:
