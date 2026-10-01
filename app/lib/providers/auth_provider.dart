@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:omi/backend/http/api/apps.dart' as apps_api;
@@ -40,14 +41,11 @@ class AuthenticationProvider extends BaseProvider {
 
   User? user;
   String? authToken;
-  bool _loading = false;
   bool _requiresReauthentication = false;
   int _sessionExpirationGeneration = 0;
   StreamSubscription<User?>? _authStateSubscription;
   StreamSubscription<User?>? _idTokenSubscription;
   StreamSubscription<AuthSessionExpiredEvent>? _sessionExpiredSubscription;
-  @override
-  bool get loading => _loading;
   bool get requiresReauthentication => _requiresReauthentication;
   int get sessionExpirationGeneration => _sessionExpirationGeneration;
 
@@ -132,65 +130,97 @@ class AuthenticationProvider extends BaseProvider {
     super.dispose();
   }
 
-  void setLoading(bool value) {
-    _loading = value;
-    notifyListeners();
-  }
+  /// Shown when the backend rejects a freshly minted Firebase ID token during
+  /// sign-in. That happens when the app's Firebase project is not the one the
+  /// backend verifies tokens against (e.g. a personal Firebase project paired
+  /// with api.omi.me).
+  static const backendRejectedSignInMessage = "Server rejected sign-in (backend doesn't trust this Firebase project).";
 
-  Future<void> onGoogleSignIn(Function() onSignIn) async {
-    final useWebAuth = Env.useWebAuth;
-    if (!loading) {
-      setLoadingState(true);
-      try {
-        UserCredential? credential;
-        if (PlatformService.isMobile && !useWebAuth) {
-          credential = await AuthService.instance.signInWithGoogleMobile();
-        } else {
-          credential = await AuthService.instance.authenticateWithProvider('google');
-        }
-        if (credential != null && _hasFirebaseUser) {
-          await _signIn(onSignIn);
-        } else {
-          AppSnackbar.showSnackbarError(
-            globalNavigatorKey.currentContext?.l10n.authFailedToSignInWithGoogle ??
-                'Failed to sign in with Google, please try again.',
-          );
-        }
-      } catch (e) {
-        Logger.debug('OAuth Google sign in error: $e');
-        AppSnackbar.showSnackbarError(
-          globalNavigatorKey.currentContext?.l10n.authenticationFailed ?? 'Authentication failed. Please try again.',
-        );
-      }
-      setLoadingState(false);
+  /// Maps a session expiry observed during a sign-in attempt to a specific
+  /// user-facing message, or null when the generic failure text applies.
+  @visibleForTesting
+  static String? signInFailureMessageFor(AuthSessionExpirationReason? reason) {
+    if (reason == AuthSessionExpirationReason.backendRejectedRefreshedToken) {
+      return backendRejectedSignInMessage;
     }
+    return null;
   }
 
-  Future<void> onAppleSignIn(Function() onSignIn) async {
+  /// Single loading state for the provider. Both [setLoading] and
+  /// [setLoadingState] drive [loading], so the auth spinner and the
+  /// double-tap guard observe the same flag.
+  void setLoading(bool value) => setLoadingState(value);
+
+  Future<void> onGoogleSignIn(Function() onSignIn) {
     final useWebAuth = Env.useWebAuth;
-    if (!loading) {
-      setLoadingState(true);
-      try {
-        UserCredential? credential;
+    return _runProviderSignIn(
+      providerName: 'Google',
+      authenticate: () {
+        if (PlatformService.isMobile && !useWebAuth) {
+          return AuthService.instance.signInWithGoogleMobile();
+        }
+        return AuthService.instance.authenticateWithProvider('google');
+      },
+      providerFailureMessage: () =>
+          globalNavigatorKey.currentContext?.l10n.authFailedToSignInWithGoogle ??
+          'Failed to sign in with Google, please try again.',
+      onSignIn: onSignIn,
+    );
+  }
+
+  Future<void> onAppleSignIn(Function() onSignIn) {
+    final useWebAuth = Env.useWebAuth;
+    return _runProviderSignIn(
+      providerName: 'Apple',
+      authenticate: () {
         if (PlatformService.isMobile && !useWebAuth && !Platform.isAndroid) {
-          credential = await AuthService.instance.signInWithAppleMobile();
-        } else {
-          credential = await AuthService.instance.authenticateWithProvider('apple');
+          return AuthService.instance.signInWithAppleMobile();
         }
-        if (credential != null && _hasFirebaseUser) {
-          await _signIn(onSignIn);
-        } else {
-          AppSnackbar.showSnackbarError(
-            globalNavigatorKey.currentContext?.l10n.authFailedToSignInWithApple ??
-                'Failed to sign in with Apple, please try again.',
-          );
-        }
-      } catch (e) {
-        Logger.debug('OAuth Apple sign in error: $e');
-        AppSnackbar.showSnackbarError(
-          globalNavigatorKey.currentContext?.l10n.authenticationFailed ?? 'Authentication failed. Please try again.',
-        );
+        return AuthService.instance.authenticateWithProvider('apple');
+      },
+      providerFailureMessage: () =>
+          globalNavigatorKey.currentContext?.l10n.authFailedToSignInWithApple ??
+          'Failed to sign in with Apple, please try again.',
+      onSignIn: onSignIn,
+    );
+  }
+
+  /// Shared provider sign-in flow. [loading] is held for the whole attempt so
+  /// the spinner shows and repeated taps are ignored. Any session expiry
+  /// emitted while the attempt runs (the post-sign-in backend calls expire the
+  /// session when the backend rejects the token) selects a specific error.
+  Future<void> _runProviderSignIn({
+    required String providerName,
+    required Future<UserCredential?> Function() authenticate,
+    required String Function() providerFailureMessage,
+    required Function() onSignIn,
+  }) async {
+    if (loading) return;
+    setLoadingState(true);
+    AuthSessionExpirationReason? sessionExpiry;
+    final expirySubscription = AuthService.instance.sessionExpiredEvents.listen((event) {
+      sessionExpiry = event.reason;
+    });
+    try {
+      final credential = await authenticate();
+      final rejection = signInFailureMessageFor(sessionExpiry);
+      if (rejection != null) {
+        Logger.debug('$providerName sign in: backend rejected the Firebase ID token');
+        AppSnackbar.showSnackbarError(rejection);
+      } else if (credential != null && _hasFirebaseUser) {
+        await _signIn(onSignIn);
+      } else {
+        AppSnackbar.showSnackbarError(providerFailureMessage());
       }
+    } catch (e) {
+      Logger.debug('OAuth $providerName sign in error: $e');
+      AppSnackbar.showSnackbarError(
+        signInFailureMessageFor(sessionExpiry) ??
+            globalNavigatorKey.currentContext?.l10n.authenticationFailed ??
+            'Authentication failed. Please try again.',
+      );
+    } finally {
+      await expirySubscription.cancel();
       setLoadingState(false);
     }
   }
