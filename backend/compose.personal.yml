@@ -1,0 +1,61 @@
+# Personal single-host deployment of the Omi backend (one process, no pusher/typesense).
+#
+# Secrets never live in the repo: the env files are read from OMI_ENV_DIR (default
+# /etc/omi-backend, mode 600 root) on the host.
+#   backend.env  - Firebase project vars, ENCRYPTION_SECRET, LLM/STT overrides, flags
+#   sa.env       - SERVICE_ACCOUNT_JSON='<one-line service-account JSON>'
+#
+# Usage (from this directory):
+#   docker compose -f compose.personal.yml up -d --build --remove-orphans
+#
+# The API is bound to loopback only; expose it with `tailscale serve`.
+name: backend
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ${OMI_DATA_DIR:-/opt/omi-data}/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    logging: *default-logging
+
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        # The default base image lives in a private registry; the public slim
+        # image of the same Python minor version works for self-hosting.
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
+    image: omi-personal-backend:latest
+    restart: unless-stopped
+    env_file:
+      - ${OMI_ENV_DIR:-/etc/omi-backend}/backend.env
+      - ${OMI_ENV_DIR:-/etc/omi-backend}/sa.env
+    environment:
+      REDIS_DB_HOST: redis
+      REDIS_DB_PORT: "6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${OMI_BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/v1/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    logging: *default-logging
