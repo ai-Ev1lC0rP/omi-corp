@@ -49,7 +49,11 @@ class _Host:
         self.waited.append(seconds)
         return self._woken_by_shutdown
 
-    async def _call(self, fn, *_args, **_kwargs):
+    async def _call(self, fn, *args, **kwargs):
+        if fn.__name__ == 'classify_raw_conversation_content':
+            return fn(*args, **kwargs)  # pure: decides from the snapshot alone
+        if fn.__name__ == 'get_conversation':
+            return None  # the recorded process_conversation stands in for deleting empty rows
         return self._results_by_function[fn.__name__]
 
 

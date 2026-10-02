@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from contextlib import contextmanager
 from typing import Any, Mapping
 
+from google.api_core.exceptions import NotFound
+
 from database import conversation_finalization_jobs as jobs_db
 from database import conversations as conversations_db
 from database import recording_sessions as recording_sessions_db
@@ -537,6 +539,30 @@ def tombstone_recording_session(
         'discarded',
         firestore_client=firestore_client,
     )
+
+
+def mark_stale_conversation_terminal(uid: str, conversation_id: str, reason: str, attempts: int) -> bool:
+    """Move a stale ``in_progress`` row that can never be finalized to ``failed`` + discarded.
+
+    Used by stale in_progress recovery for rows that are undecryptable or empty after repeated
+    passes. Only status fields change; the stored transcript blob is left untouched so the row
+    can be restored by hand. Conditional on the row still being ``in_progress``, not discarded.
+    """
+    try:
+        return conversations_db.claim_conversation_status(
+            uid,
+            conversation_id,
+            ConversationStatus.in_progress,
+            ConversationStatus.failed,
+            extra_updates={
+                'discarded': True,
+                'recovery_attempts': attempts,
+                'recovery_terminal_reason': reason,
+                'recovery_terminal_at': datetime.now(timezone.utc),
+            },
+        )
+    except NotFound:
+        return False
 
 
 def delete_empty_recording_conversation(

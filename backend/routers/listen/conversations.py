@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from database import stale_conversation_recovery as stale_recovery_db
 from models.conversation import Conversation
 from models.conversation_enums import ConversationSource, ConversationStatus
 from models.message_event import ConversationEvent, ConversationSessionEvent, LastConversationEvent
@@ -38,6 +39,10 @@ STALE_IN_PROGRESS_RECOVERY_AGE_SECONDS = 3600
 # Per-session recovery bound: spreads a large backlog across sessions instead of
 # fanning dozens of LLM finalizations out of one reconnect.
 STALE_IN_PROGRESS_RECOVERY_BATCH = 10
+# A stale row that is unreadable (e.g. encrypted under a lost key) or still empty after this
+# many recovery passes is moved to a terminal state instead of being retried by every session.
+# More than one pass so a transient misconfiguration cannot terminalize rows on first sight.
+STALE_IN_PROGRESS_RECOVERY_MAX_ATTEMPTS = 3
 
 
 class LiveConversationController:
@@ -321,7 +326,10 @@ class LiveConversationController:
         is intact. `process_conversation` already makes the right call per row —
         content goes through the durable finalization seam, empty rows are
         deleted — so recovery is exactly the path a live timeout takes. Bounded
-        and oldest-first so one session never stampedes the pipeline.
+        and oldest-first so one session never stampedes the pipeline. Rows that
+        can never be finalized (undecryptable, or empty but not deletable) are
+        counted per pass and become failed+discarded after
+        STALE_IN_PROGRESS_RECOVERY_MAX_ATTEMPTS, so sessions stop retrying them.
         """
         stale = await self.host.persistence.call(
             conversations_db.get_stale_in_progress_conversations,
@@ -332,13 +340,50 @@ class LiveConversationController:
         for conversation in stale or []:
             if conversation['id'] == self.host.state.current_conversation_id:
                 continue
-            logger.info(
-                'recovering stale in_progress conversation uid=%s conversation=%s finished_at=%s',
-                self.host.request.uid,
-                conversation['id'],
-                conversation.get('finished_at'),
+            await self._recover_stale_conversation(conversation)
+
+    async def _recover_stale_conversation(self, conversation: dict[str, Any]) -> None:
+        """One bounded recovery pass; unrecoverable rows become terminal after N passes."""
+        uid = self.host.request.uid
+        conversation_id = conversation['id']
+        attempt = int(conversation.get('recovery_attempts') or 0) + 1
+        content = await self.host.persistence.call(
+            stale_recovery_db.classify_raw_conversation_content, uid, conversation
+        )
+        logger.info(
+            'recovering stale in_progress conversation uid=%s conversation=%s finished_at=%s content=%s attempt=%d',
+            uid,
+            conversation_id,
+            conversation.get('finished_at'),
+            content,
+            attempt,
+        )
+        if content == 'content':
+            # Readable content goes through the durable finalization seam as before.
+            await self.process_conversation(conversation_id)
+            return
+        if content == 'empty':
+            # Empty rows are normally deleted here; only a row that survives counts as an attempt.
+            await self.process_conversation(conversation_id)
+            latest = await self.host.persistence.call(conversations_db.get_conversation, uid, conversation_id)
+            if not latest or latest.get('status') != ConversationStatus.in_progress.value or latest.get('discarded'):
+                return
+        # Undecodable rows skip processing: finalization cannot read them either.
+        reason = 'undecryptable' if content == 'undecodable' else 'empty'
+        if attempt >= STALE_IN_PROGRESS_RECOVERY_MAX_ATTEMPTS:
+            terminal = await self.host.persistence.call(
+                lifecycle_service.mark_stale_conversation_terminal, uid, conversation_id, reason, attempt
             )
-            await self.process_conversation(conversation['id'])
+            logger.warning(
+                'stale in_progress conversation %s after %d attempts uid=%s conversation=%s reason=%s',
+                'marked failed+discarded' if terminal else 'not terminalized (changed concurrently)',
+                attempt,
+                uid,
+                conversation_id,
+                reason,
+            )
+            return
+        await self.host.persistence.call(stale_recovery_db.record_stale_recovery_attempt, uid, conversation_id, attempt)
 
     async def lifecycle_loop(self) -> None:
         while self.host.state.active:
