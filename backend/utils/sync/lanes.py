@@ -136,3 +136,14 @@ def classify_sync_lane(
         newest_capture_at=newest,
         maximum_age_seconds=maximum_age,
     )
+
+
+def inline_backfill_enabled() -> bool:
+    """Single-host deployments have no isolated Cloud Tasks backfill worker.
+
+    ``SYNC_INLINE_BACKFILL_ENABLED=true`` lets historical (backfill-lane) recordings run
+    on the inline pipeline, bounded by its ``SYNC_INLINE_BACKFILL_CONCURRENCY`` semaphore
+    and the per-user backfill slot, instead of failing closed with 503 forever. Off by
+    default so multi-tenant deployments keep backfill off the fresh-capacity path.
+    """
+    return os.getenv('SYNC_INLINE_BACKFILL_ENABLED', 'false').strip().lower() == 'true'

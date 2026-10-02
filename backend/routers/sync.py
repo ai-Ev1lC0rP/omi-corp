@@ -140,7 +140,7 @@ from utils.sync.capture_manifest import (
     manifest_claims_match_paths,
     verify_capture_manifest,
 )
-from utils.sync.lanes import SyncLane, capture_times_within_window, classify_sync_lane
+from utils.sync.lanes import SyncLane, capture_times_within_window, classify_sync_lane, inline_backfill_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -1109,7 +1109,7 @@ async def sync_local_files_v2(
         owned_paths = list(paths)
         paths = []  # Prevent finally cleanup of files now owned by bg task
 
-        if lane_decision.lane == SyncLane.BACKFILL and not cloud_task_eligible:
+        if lane_decision.lane == SyncLane.BACKFILL and not cloud_task_eligible and not inline_backfill_enabled():
             # Fail closed: backfill may run only on the dedicated queue/service.
             # BYOK cannot be serialized into Cloud Tasks, so it is retained on
             # device until an isolated BYOK path exists.

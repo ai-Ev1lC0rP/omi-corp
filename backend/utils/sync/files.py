@@ -221,7 +221,8 @@ def detect_source_from_filenames(filenames: List[Optional[str]]) -> Conversation
     Keeps the original first-match-wins loop semantics: the first filename that carries a known
     marker sets the source and stops the scan. limitless is checked before phone so a limitless
     file never loses to phone. 'omibatchphone' also covers the 'omibatchphoneauto' offline
-    auto-switch variant; 'phonemic' covers the phone-mic WAL fallback uploads. Defaults to omi.
+    auto-switch variant; 'phonemic' covers the phone-mic WAL fallback uploads; 'applewatch'
+    covers Apple Watch store-and-forward chunks. Defaults to omi.
     """
     for filename in filenames:
         if not filename:
@@ -231,6 +232,8 @@ def detect_source_from_filenames(filenames: List[Optional[str]]) -> Conversation
             return ConversationSource.limitless
         if 'omibatchphone' in name or 'phonemic' in name:
             return ConversationSource.phone
+        if 'applewatch' in name:
+            return ConversationSource.apple_watch
     return ConversationSource.omi
 
 

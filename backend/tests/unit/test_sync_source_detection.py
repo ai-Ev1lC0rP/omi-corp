@@ -6,6 +6,7 @@ sync.py upload sites use to label a batch. It must:
     'omibatchphoneauto' offline auto-switch variant) → phone
   - map phone-mic WAL fallback uploads ('phonemic') → phone
   - keep mapping limitless uploads → limitless (first-match-wins preserved)
+  - map Apple Watch store-and-forward chunks ('applewatch') → apple_watch
   - default plain omi-batch uploads → omi
 """
 
@@ -36,6 +37,7 @@ def detect_source(monkeypatch):
         ('audio_omibatchphoneauto_opus_fs320_16000_1_fs320_1720000000.bin', ConversationSource.phone),
         ('audio_phonemic_pcm16_16000_1_fs160_1720000000.bin', ConversationSource.phone),
         ('audio_omibatchlimitless_opus_fs320_16000_1_fs320_1720000000.bin', ConversationSource.limitless),
+        ('audio_applewatch_pcm16_16000_1_fs320_1720000000000.bin', ConversationSource.apple_watch),
         ('audio_omibatch_opus_16000_1_fs320_1720000000.bin', ConversationSource.omi),
     ],
 )

@@ -101,6 +101,7 @@ from utils.observability.transcription import record_sync_transcription_outcome
 from utils.speaker_assignment import process_speaker_assigned_segments
 from utils.speaker_identification import detect_speaker_from_text
 from utils.stt.pre_recorded import get_prerecorded_service, postprocess_words, prerecorded
+from utils.sync import local_stt
 from utils.stt.outcomes import (
     TranscriptionFailure,
     TranscriptionOutcome,
@@ -1048,8 +1049,10 @@ def process_segment(
     provider = 'unknown'
     model = 'unknown'
     try:
-        url = get_syncing_file_temporal_signed_url(path)
-        schedule_syncing_temporal_file_deletion(path)
+        local = local_stt.sync_local_stt_enabled()  # single host: no syncing bucket or cloud provider
+        url = None if local else get_syncing_file_temporal_signed_url(path)
+        if url:
+            schedule_syncing_temporal_file_deletion(path)
 
         # Apply user transcription preferences (vocabulary, language, model)
         prefs = transcription_prefs or {}
@@ -1059,19 +1062,21 @@ def process_segment(
         single_language_mode = prefs.get('single_language_mode', False)
 
         req_language = user_language if (single_language_mode and user_language) else 'multi'
-        provider, _, model = get_prerecorded_service(req_language)
+        provider, _, model = local_stt.SYNC_LOCAL_STT_SERVICE if local else get_prerecorded_service(req_language)
 
         # When single-language mode is active, trust the user's language choice
         # rather than Deepgram's detection (avoids overriding explicit selection).
-        use_return_language = not (single_language_mode and user_language)
-        words, detected_language = prerecorded(
-            url,
-            speakers_count=3,
-            attempts=0,
-            return_language=True,
-            language=req_language,
-            keywords=vocabulary if vocabulary else None,
-        )
+        if local:
+            words, detected_language = local_stt.transcribe_segment(path)
+        else:
+            words, detected_language = prerecorded(
+                url,
+                speakers_count=3,
+                attempts=0,
+                return_language=True,
+                language=req_language,
+                keywords=vocabulary if vocabulary else None,
+            )
         language = user_language if (single_language_mode and user_language) else detected_language
         if not words:
             # A provider that returns without error and produces no words is
@@ -1103,7 +1108,8 @@ def process_segment(
 
         # Download the segment audio once — used for speaker ID and/or to persist the
         # conversation's audio as a private-cloud chunk (realtime parity, below).
-        audio_bytes = _download_audio_bytes(url) if (person_embeddings_cache or private_cloud_sync_enabled) else None
+        fetch_audio = _download_audio_bytes if url else local_stt.read_segment_bytes
+        audio_bytes = fetch_audio(url or path) if (person_embeddings_cache or private_cloud_sync_enabled) else None
         try:
             identify_speakers_for_segments(
                 transcript_segments,
@@ -1999,7 +2005,7 @@ async def _run_full_pipeline_background_async(  # pyright: ignore[reportGeneralT
             req_language = (
                 user_language if transcription_prefs.get('single_language_mode', False) and user_language else 'multi'
             )
-            sync_provider, _, sync_model = get_prerecorded_service(req_language)
+            sync_provider, _, sync_model = local_stt.service_triple() or get_prerecorded_service(req_language)
             await run_blocking(
                 db_executor,
                 _update_sync_job_for_run,

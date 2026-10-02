@@ -2667,5 +2667,43 @@ async def test_backfill_requires_isolated_dispatch(dispatch_enabled, byok):
                 sys.modules[mod_name] = orig
 
 
+@pytest.mark.asyncio
+async def test_single_host_inline_backfill_opt_in_runs_inline(monkeypatch):
+    """SYNC_INLINE_BACKFILL_ENABLED lets a host without Cloud Tasks process backfill inline."""
+    from starlette.datastructures import UploadFile
+
+    monkeypatch.setenv('SYNC_INLINE_BACKFILL_ENABLED', 'true')
+    module, saved_modules, _, BytesIO, _, _ = _load_sync_router_for_fast_path()
+    module.start_background_task = MagicMock()
+    module.is_cloud_tasks_dispatch_enabled = MagicMock(return_value=False)
+    module.has_byok_keys = MagicMock(return_value=False)
+    module.classify_sync_lane = MagicMock(
+        return_value=types.SimpleNamespace(
+            lane=module.SyncLane.BACKFILL,
+            trust=types.SimpleNamespace(value='legacy'),
+            reason='unbound_capture_time',
+            maximum_age_seconds=120,
+            automatic_recovery_allowed=True,
+        )
+    )
+
+    try:
+        upload = UploadFile(filename='historical.opus', file=BytesIO(b'\x00' * 10))
+        response = await module.sync_local_files_v2(files=[upload], uid='test-uid')
+
+        assert response.status_code == 202
+        assert json.loads(response.body)['status'] == 'queued'
+        module.enqueue_sync_job.assert_not_called()
+        module.start_background_task.assert_called_once()
+    finally:
+        sys.modules.pop('routers.sync', None)
+        sys.modules.pop('utils.sync.pipeline', None)
+        for mod_name, orig in saved_modules.items():
+            if orig is None:
+                sys.modules.pop(mod_name, None)
+            else:
+                sys.modules[mod_name] = orig
+
+
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-v']))
