@@ -495,6 +495,9 @@ class CaptureController extends ChangeNotifier
     await _resetState();
   }
 
+  /// Devices whose audio reaches the backend only through offline sync uploads.
+  static bool skipsRealtimeSocketForDevice(DeviceType? type) => type == DeviceType.appleWatch;
+
   static bool supportsTranscribeLater(DeviceType? type) {
     return type == DeviceType.omi ||
         type == DeviceType.openglass ||
@@ -645,6 +648,15 @@ class CaptureController extends ChangeNotifier
     // the user uploads recordings later. See _saveNativeBleStreamConfig.
     if (SharedPreferencesUtil().batchModeEnabled) {
       Logger.debug('Batch mode enabled — skipping transcription websocket');
+      return;
+    }
+
+    // Apple Watch is store-and-forward: the watch records chunk files that
+    // WatchChunkSyncService uploads through offline sync. A realtime socket
+    // per watch reachability flap only produced idle, overlapping /v4/listen
+    // sessions, so the watch never opens one.
+    if (skipsRealtimeSocketForDevice(_recordingDevice?.type) && source != ConversationSource.phone.name) {
+      Logger.debug('Apple Watch uses chunk sync — skipping transcription websocket');
       return;
     }
 

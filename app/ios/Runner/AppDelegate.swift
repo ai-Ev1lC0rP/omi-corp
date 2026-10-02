@@ -115,6 +115,8 @@ final class QuickActionsIconPatcher: NSObject {
             let api: WatchRecorderHostAPI = RecorderHostApiImpl(session: session!, flutterWatchAPI: flutterWatchAPI)
 
             WatchRecorderHostAPISetup.setUp(binaryMessenger: controller!.binaryMessenger, api: api)
+            // Store-and-forward watch audio: chunk files arrive via WCSession.transferFile.
+            WatchChunkInbox.shared.attach(messenger: controller!.binaryMessenger)
       }
 
       // Native BLE module — register Pigeon APIs
@@ -456,6 +458,13 @@ extension AppDelegate: WCSessionDelegate {
     
     func sessionDidDeactivate(_ session: WCSession) {
         print("Session Watch Deactivate")
+        // Watch switched: re-activate so transfers from the new watch keep arriving.
+        session.activate()
+    }
+
+    // Store-and-forward watch audio chunk (queued by the watch with transferFile).
+    func session(_ session: WCSession, didReceive file: WCSessionFile) {
+        WatchChunkInbox.shared.receive(file)
     }
     
     // Receive a message from watch (foreground/active)

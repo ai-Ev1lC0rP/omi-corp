@@ -5,9 +5,11 @@ import 'package:flutter/foundation.dart';
 import 'package:omi/backend/http/shared.dart';
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/backend/schema/conversation.dart';
+import 'package:omi/services/auth_service.dart';
 import 'package:omi/services/connectivity_service.dart';
 import 'package:omi/services/services.dart';
 import 'package:omi/services/wals.dart';
+import 'package:omi/services/watch_chunks/watch_chunk_sync.dart';
 import 'package:omi/utils/debug_log_manager.dart';
 import 'package:omi/utils/logger.dart';
 import 'package:omi/utils/other/time_utils.dart';
@@ -359,6 +361,13 @@ class SyncProvider extends ChangeNotifier implements IWalServiceListener, IWalSy
       if (_isDisposed) return;
       if (_startBackgroundSync) {
         await _attachTransferCoordinator();
+        // Apple Watch store-and-forward chunks upload independently of watch reachability.
+        unawaited(
+          WatchChunkSyncService.instance.start(
+            canUpload: () => AuthService.instance.isSignedIn(),
+            connectivityChanges: ConnectivityService().onConnectionChange,
+          ),
+        );
       }
     } catch (error, stackTrace) {
       Logger.error('SyncProvider: initialization failed: $error\n$stackTrace');

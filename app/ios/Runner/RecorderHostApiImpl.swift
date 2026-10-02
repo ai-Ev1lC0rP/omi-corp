@@ -153,3 +153,128 @@ class RecorderHostApiImpl: WatchRecorderHostAPI {
 }
 
 
+
+/// Phone-side landing zone for Apple Watch store-and-forward audio chunks.
+///
+/// The watch queues each finished chunk with `WCSession.transferFile`; iOS delivers it here
+/// even when the app was launched in the background. The file must be moved before the
+/// delegate call returns, so this class persists it natively (audio + JSON sidecar, the
+/// sidecar being the commit marker) and only then pokes Dart, which uploads chunks through
+/// `/v2/sync-local-files` and asks us to acknowledge them back to the watch.
+final class WatchChunkInbox {
+    static let shared = WatchChunkInbox()
+    static let channelName = "com.omi.watch/chunks"
+
+    private var channel: FlutterMethodChannel?
+    private let fileManager = FileManager.default
+
+    var directory: URL {
+        let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return documents.appendingPathComponent("watch_chunks", isDirectory: true)
+    }
+
+    func attach(messenger: FlutterBinaryMessenger) {
+        let channel = FlutterMethodChannel(name: Self.channelName, binaryMessenger: messenger)
+        channel.setMethodCallHandler { [weak self] call, result in
+            guard let self else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            let arguments = call.arguments as? [String: Any]
+            switch call.method {
+            case "getInboxPath":
+                try? self.fileManager.createDirectory(at: self.directory, withIntermediateDirectories: true)
+                result(self.directory.path)
+            case "ackChunks":
+                let ids = (arguments?["chunkIds"] as? [String]) ?? []
+                result(self.ack(chunkIds: ids))
+            case "configureWatch":
+                var payload: [String: Any] = ["method": "chunkConfig"]
+                if let seconds = arguments?["chunkSeconds"] as? Double { payload["chunkSeconds"] = seconds }
+                if let maxBytes = arguments?["maxStorageBytes"] as? Int { payload["maxStorageBytes"] = Int64(maxBytes) }
+                result(self.send(payload))
+            case "isWatchAppInstalled":
+                let session = WCSession.default
+                result(WCSession.isSupported() && session.activationState == .activated && session.isPaired && session.isWatchAppInstalled)
+            case "beginBackgroundTask":
+                var taskId: UIBackgroundTaskIdentifier = .invalid
+                taskId = UIApplication.shared.beginBackgroundTask(withName: "omi.watchChunkUpload") {
+                    UIApplication.shared.endBackgroundTask(taskId)
+                }
+                result(taskId.rawValue)
+            case "endBackgroundTask":
+                if let raw = arguments?["taskId"] as? Int {
+                    UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: raw))
+                }
+                result(nil)
+            default:
+                result(FlutterMethodNotImplemented)
+            }
+        }
+        self.channel = channel
+    }
+
+    /// Called from `session(_:didReceive:)`. Must finish synchronously: WatchConnectivity
+    /// deletes `file.fileURL` as soon as the delegate method returns.
+    func receive(_ file: WCSessionFile) {
+        guard let metadata = file.metadata,
+              metadata["kind"] as? String == "omiWatchChunk",
+              let chunkId = metadata["chunkId"] as? String,
+              Self.isSafeChunkId(chunkId) else {
+            NSLog("[WatchChunks] ignoring unexpected file transfer \(file.fileURL.lastPathComponent)")
+            return
+        }
+        let audio = directory.appendingPathComponent("\(chunkId).wav")
+        let sidecar = directory.appendingPathComponent("\(chunkId).json")
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            if fileManager.fileExists(atPath: audio.path) {
+                // Re-delivery of a chunk we already hold (no ack reached the watch yet).
+                NSLog("[WatchChunks] duplicate delivery of \(chunkId); keeping existing copy")
+            } else {
+                try fileManager.moveItem(at: file.fileURL, to: audio)
+            }
+            if !fileManager.fileExists(atPath: sidecar.path) {
+                var record: [String: Any] = [:]
+                for (key, value) in metadata where JSONSerialization.isValidJSONObject([key: value]) {
+                    record[key] = value
+                }
+                record["receivedAtMs"] = Int64(Date().timeIntervalSince1970 * 1000)
+                let data = try JSONSerialization.data(withJSONObject: record, options: [])
+                try data.write(to: sidecar, options: .atomic)
+            }
+            NSLog("[WatchChunks] stored \(chunkId)")
+        } catch {
+            NSLog("[WatchChunks] failed to persist \(chunkId): \(error.localizedDescription)")
+            return
+        }
+        DispatchQueue.main.async {
+            self.channel?.invokeMethod("chunkReceived", arguments: chunkId)
+        }
+    }
+
+    /// Tell the watch these chunks are uploaded + transcribed so it can delete them.
+    /// transferUserInfo is queued and survives disconnects; sendMessage is the fast path.
+    @discardableResult
+    func ack(chunkIds: [String]) -> Bool {
+        let ids = chunkIds.filter(Self.isSafeChunkId)
+        guard !ids.isEmpty else { return false }
+        return send(["method": "chunkAck", "chunkIds": ids])
+    }
+
+    private func send(_ payload: [String: Any]) -> Bool {
+        guard WCSession.isSupported() else { return false }
+        let session = WCSession.default
+        guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return false }
+        session.transferUserInfo(payload)
+        if session.isReachable {
+            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        }
+        return true
+    }
+
+    static func isSafeChunkId(_ chunkId: String) -> Bool {
+        !chunkId.isEmpty && chunkId.count < 128
+            && chunkId.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+    }
+}

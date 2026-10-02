@@ -62,7 +62,7 @@ struct WatchRecorderView<Recorder: WatchRecorderControlling>: View {
                     Spacer()
                     
                     Group {
-                        if viewModel.isRecording, let startedAt = viewModel.recordingStartedAt {
+                        if viewModel.isRecording, let startedAt = viewModel.recordingStartedAt, viewModel.isCapturing {
                             if presentationController.phase.showsRecordingRipple {
                                 Text("Listening")
                                     .font(.system(size: 16, weight: .medium))
@@ -74,12 +74,24 @@ struct WatchRecorderView<Recorder: WatchRecorderControlling>: View {
                                     .accessibilityLabel(Text("watch.accessibility.elapsedRecordingTime"))
                                     .accessibilityValue(Text(startedAt, style: .timer))
                             }
+                        } else if viewModel.isRecording {
+                            Text(viewModel.statusNote ?? "Resuming…")
+                                .font(.system(size: 14, weight: .medium))
+                                .multilineTextAlignment(.center)
                         } else {
                             Text("Tap to Record")
                                 .font(.system(size: 16, weight: .medium))
                         }
                     }
                     .foregroundColor(.white)
+
+                    WatchSyncStatusLine(
+                        pendingChunkCount: viewModel.pendingChunkCount,
+                        pendingBytes: viewModel.pendingBytes,
+                        droppedChunkCount: viewModel.droppedChunkCount,
+                        isPhoneReachable: viewModel.isPhoneReachable
+                    )
+                    .padding(.top, 4)
 
                     Spacer()
                         .frame(height: 20)
@@ -92,6 +104,40 @@ struct WatchRecorderView<Recorder: WatchRecorderControlling>: View {
                 startedAt: viewModel.recordingStartedAt
             )
         }
+    }
+}
+
+/// "3 waiting · 2.9 MB" / "All synced", plus a phone-reachability dot and a dropped-chunk warning.
+private struct WatchSyncStatusLine: View {
+    let pendingChunkCount: Int
+    let pendingBytes: Int64
+    let droppedChunkCount: Int
+    let isPhoneReachable: Bool
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(isPhoneReachable ? Color.green : Color.gray)
+                    .frame(width: 6, height: 6)
+                Text(summary)
+                    .font(.system(size: 12, weight: .regular))
+                    .monospacedDigit()
+            }
+            if droppedChunkCount > 0 {
+                Text("\(droppedChunkCount) dropped (storage full)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.orange)
+            }
+        }
+        .foregroundColor(.gray)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var summary: String {
+        guard pendingChunkCount > 0 else { return "All synced" }
+        let size = ByteCountFormatter.string(fromByteCount: pendingBytes, countStyle: .file)
+        return "\(pendingChunkCount) waiting · \(size)"
     }
 }
 

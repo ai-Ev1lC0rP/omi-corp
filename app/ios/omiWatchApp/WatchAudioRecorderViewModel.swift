@@ -1,388 +1,358 @@
-import Foundation
-import Combine
-import WatchConnectivity
 import AVFoundation
+import Combine
+import Foundation
+import UserNotifications
+import WatchConnectivity
+import WatchKit
+import os
 
+/// Store-and-forward Apple Watch recorder.
+///
+/// The watch always records locally into rolling WAV chunks (`ChunkedCaptureEngine`) and is
+/// the source of truth for audio. Finished chunks are queued to the phone with
+/// `WCSession.transferFile`, which the system delivers whenever the phone becomes reachable
+/// (it survives disconnects, app suspension and relaunch). A chunk is deleted only after the
+/// phone sends a `chunkAck` saying it was uploaded and transcribed. There is no live audio
+/// stream any more, so a phone/watch connect or disconnect can no longer stop listening.
 @MainActor
-class WatchAudioRecorderViewModel: NSObject, WatchRecorderControlling {
+final class WatchAudioRecorderViewModel: NSObject, WatchRecorderControlling {
+    static let wantsRecordingDefaultsKey = "omi.watch.wantsRecording"
+    /// Re-send a delivered-but-unacknowledged chunk after this long (phone lost it, reinstall, ...).
+    static let redeliverAfter: TimeInterval = 6 * 60 * 60
+    static let maxQueuedTransfers = 40
+
     @Published var isRecording: Bool = false
     @Published private(set) var recordingStartedAt: Date?
+    @Published private(set) var isCapturing: Bool = false
+    @Published private(set) var pendingChunkCount: Int = 0
+    @Published private(set) var pendingBytes: Int64 = 0
+    @Published private(set) var droppedChunkCount: Int = 0
+    @Published private(set) var lastAckAt: Date?
+    @Published private(set) var isPhoneReachable: Bool = false
+    @Published private(set) var statusNote: String?
 
     var session: WCSession
-    private var audioEngine: AVAudioEngine?
-    private var inputNode: AVAudioInputNode?
-    private var audioBuffer: AVAudioPCMBuffer?
-    private var chunkIndex: Int = 0
-    private var isStreaming: Bool = false
-    private var inputFormat: AVAudioFormat?
-    private var audioConverter: AVAudioConverter?
-    private var targetFormat: AVAudioFormat?
-    private var detectedSampleRate: Double = 0.0
-    
-    // Audio buffering for multi-second chunks
-    private var chunkBuffer: Data = Data()
-    private var bufferStartTime: Date?
-    private let bufferDuration: TimeInterval = 1.5 // 1.5 second chunks
-    
-    init(session: WCSession = .default) {
+    private let store: WatchChunkStore
+    private let capture: ChunkedCaptureEngine
+    private let logger = Logger(subsystem: "com.casonclark.omi.watchapp", category: "recorder")
+    private var pumpTimer: Timer?
+    private var observers: [NSObjectProtocol] = []
+    private var needsResume = false
+
+    init(session: WCSession = .default, store: WatchChunkStore = WatchChunkStore()) {
         self.session = session
+        self.store = store
+        self.capture = ChunkedCaptureEngine(store: store)
         super.init()
-        self.session.delegate = self
-        session.activate()
-        
+
+        capture.onChunkCommitted = { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let dropped = self.store.enforceStorageCap()
+                if !dropped.isEmpty { self.logger.warning("dropped \(dropped.count) chunk(s) over storage cap") }
+                self.refreshStatus()
+                self.pumpTransfers()
+            }
+        }
+        capture.onEngineStopped = { [weak self] reason in
+            Task { @MainActor in self?.handleEngineStopped(reason: reason) }
+        }
+
+        if WCSession.isSupported() {
+            self.session.delegate = self
+            self.session.activate()
+        }
+        observeAudioSession()
+
+        capture.recoverOrphans()
+        refreshStatus()
+
         BatteryManager.shared.startBatteryMonitoring()
         BatteryManager.shared.sendWatchInfo()
+
+        pumpTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshStatus()
+                self?.pumpTransfers()
+            }
+        }
+
+        if UserDefaults.standard.bool(forKey: Self.wantsRecordingDefaultsKey) {
+            // Resume the user's intent after a relaunch. Audio I/O can only start while the
+            // app is active; `appBecameActive()` retries if this attempt is too early.
+            isRecording = true
+            startCapture()
+        }
     }
 
+    // MARK: - Public controls
+
     func startRecording() {
-        guard !isRecording else {
-            return
-        }
-
-        // Check microphone permissions and setup audio session
-        checkMicrophonePermissionAndSetup { [weak self] success in
-            guard let self = self else {
-                return
-            }
-
-            if success {
-                self.setupAudioStreaming()
-                self.recordingStartedAt = Date()
-                self.isRecording = true
-                self.session.sendMessage(["method": "startRecording"], replyHandler: nil)
-            } else {
-                self.session.sendMessage(["method": "recordingError", "error": "Microphone permission denied"], replyHandler: nil)
-            }
-        }
+        UserDefaults.standard.set(true, forKey: Self.wantsRecordingDefaultsKey)
+        isRecording = true
+        requestNotificationPermissionIfNeeded()
+        startCapture()
     }
 
     func stopRecording() {
-        guard isRecording else {
+        UserDefaults.standard.set(false, forKey: Self.wantsRecordingDefaultsKey)
+        isRecording = false
+        needsResume = false
+        capture.stop()
+        isCapturing = false
+        recordingStartedAt = nil
+        statusNote = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        sendIfReachable(["method": "stopRecording"])
+        refreshStatus()
+        pumpTransfers()
+    }
+
+    /// Scene became active (app opened, wrist raised onto the app, notification tapped).
+    func appBecameActive() {
+        refreshStatus()
+        pumpTransfers()
+        if isRecording && !capture.isRunning {
+            startCapture()
+        }
+    }
+
+    // MARK: - Capture lifecycle
+
+    private func startCapture() {
+        guard !capture.isRunning else {
+            isCapturing = true
             return
         }
-
-        isRecording = false
-        recordingStartedAt = nil
-        isStreaming = false
-
-        // Stop audio streaming
-        inputNode?.removeTap(onBus: 0)
-        audioEngine?.stop()
-        inputNode = nil
-        audioEngine = nil
-
-        // Clean up resampling resources
-        audioConverter = nil
-        targetFormat = nil
-        detectedSampleRate = 0.0
-
-        // Send any remaining buffered data and final chunk
-        sendFinalAudioChunk()
-        
-        // Reset buffer state
-        chunkBuffer = Data()
-        bufferStartTime = nil
-
-        session.sendMessage(["method": "stopRecording"], replyHandler: nil)
-    }
-
-    private func bufferAndSendAudioData(_ audioData: Data) {
-        // Initialize buffer start time on first data
-        if bufferStartTime == nil {
-            bufferStartTime = Date()
-        }
-        
-        // Add data to buffer
-        chunkBuffer.append(audioData)
-        
-        // Check if we've buffered for target duration
-        let currentTime = Date()
-        let elapsedTime = currentTime.timeIntervalSince(bufferStartTime!)
-        
-        if elapsedTime >= bufferDuration {
-            // Send the accumulated buffer
-            sendBufferedAudioChunk()
-            
-            // Reset buffer for next window
-            chunkBuffer = Data()
-            bufferStartTime = currentTime
-        }
-    }
-    
-    private func sendBufferedAudioChunk() {
-        guard !chunkBuffer.isEmpty else { return }
-        
-        let messageData: [String: Any] = [
-            "method": "sendAudioChunk",
-            "audioChunk": chunkBuffer,
-            "chunkIndex": chunkIndex,
-            "isLast": false,
-            "sampleRate": 16000.0
-        ]
-        
-        if session.isReachable {
-            session.sendMessage(messageData, replyHandler: nil) { error in
-                // Fallback to transferUserInfo for background reliability
-                self.session.transferUserInfo(messageData)
+        checkMicrophonePermission { [weak self] granted in
+            guard let self else { return }
+            guard granted else {
+                self.isCapturing = false
+                self.statusNote = "Microphone access denied"
+                self.sendIfReachable(["method": "recordingError", "error": "Microphone permission denied"])
+                return
             }
-        } else {
-            // Use transferUserInfo when not reachable (background/screen off)
-            session.transferUserInfo(messageData)
-        }
-        
-        chunkIndex += 1
-    }
-    
-    private func sendFinalAudioChunk() {
-        if !chunkBuffer.isEmpty {
-            sendBufferedAudioChunk()
-        }
-        
-        let finalMessageData: [String: Any] = [
-            "method": "sendAudioChunk",
-            "audioChunk": Data(),
-            "chunkIndex": chunkIndex,
-            "isLast": true,
-            "sampleRate": 16000.0
-        ]
-        
-        if session.isReachable {
-            session.sendMessage(finalMessageData, replyHandler: nil) { error in
-                self.session.transferUserInfo(finalMessageData)
-            }
-        } else {
-            session.transferUserInfo(finalMessageData)
-        }
-        
-    }
-
-    private func checkMicrophonePermissionAndSetup(completion: @escaping (Bool) -> Void) {
-        let audioSession = AVAudioSession.sharedInstance()
-        
-        let permissionStatus = audioSession.recordPermission
-        
-        switch permissionStatus {
-        case .granted:
-            setupAudioSessionAfterPermission(completion: completion)
-            
-        case .denied:
-            completion(false)
-            
-        case .undetermined:
-            // Request permission
-            audioSession.requestRecordPermission { [weak self] granted in
-                DispatchQueue.main.async {
-                    if granted {
-                        self?.setupAudioSessionAfterPermission(completion: completion)
-                    } else {
-                        completion(false)
-                    }
+            do {
+                let audioSession = AVAudioSession.sharedInstance()
+                // playAndRecord + mixWithOthers: only calls/alarms interrupt us.
+                try audioSession.setCategory(.playAndRecord, mode: .default, options: [.mixWithOthers])
+                try audioSession.setActive(true, options: [])
+                try self.capture.start()
+                self.isCapturing = true
+                self.needsResume = false
+                self.statusNote = nil
+                if self.recordingStartedAt == nil { self.recordingStartedAt = Date() }
+                self.sendIfReachable(["method": "startRecording"])
+                self.logger.info("recording started")
+            } catch {
+                self.isCapturing = false
+                self.needsResume = true
+                self.statusNote = "Paused — open Omi to resume"
+                self.logger.error("capture start failed: \(error.localizedDescription, privacy: .public)")
+                if WKApplication.shared().applicationState != .active {
+                    self.scheduleResumeNotification()
                 }
             }
-            
-        @unknown default:
-            completion(false)
         }
     }
-    
-    private func setupAudioSessionAfterPermission(completion: @escaping (Bool) -> Void) {
-        let audioSession = AVAudioSession.sharedInstance()
-        
-        do {
-            try audioSession.setCategory(.playAndRecord, 
-                                       mode: .default,
-                                       options: [.mixWithOthers, .allowBluetooth])
-            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+
+    private func handleEngineStopped(reason: String) {
+        isCapturing = false
+        guard isRecording else { return }
+        logger.warning("engine stopped (\(reason, privacy: .public)); restarting")
+        startCapture()
+    }
+
+    private func observeAudioSession() {
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] note in
+            let typeValue = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            Task { @MainActor in self?.handleInterruption(typeValue: typeValue) }
+        })
+        observers.append(center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.capture.handleInterruptionBegan()
+                self.handleEngineStopped(reason: "mediaServicesReset")
+            }
+        })
+    }
+
+    private func handleInterruption(typeValue: UInt?) {
+        guard let typeValue, let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+        switch type {
+        case .began:
+            logger.info("audio interruption began")
+            capture.handleInterruptionBegan()
+            isCapturing = false
+            if isRecording { statusNote = "Interrupted" }
+        case .ended:
+            logger.info("audio interruption ended")
+            guard isRecording else { return }
+            startCapture()
+        @unknown default:
+            break
+        }
+    }
+
+    private func checkMicrophonePermission(completion: @escaping (Bool) -> Void) {
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
             completion(true)
-        } catch {
+        case .denied:
+            completion(false)
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { granted in
+                DispatchQueue.main.async { completion(granted) }
+            }
+        @unknown default:
             completion(false)
         }
     }
 
     func requestMicrophonePermissionOnly() {
-        
-        let audioSession = AVAudioSession.sharedInstance()
-        let permissionStatus = audioSession.recordPermission
-        
-        switch permissionStatus {
-        case .granted:
-            session.sendMessage(["method": "microphonePermissionResult", "granted": true], replyHandler: nil)
-            
-        case .denied:
-            session.sendMessage(["method": "microphonePermissionResult", "granted": false], replyHandler: nil)
-            
-        case .undetermined:
-            // Request permission - this will show the permission dialog
-            audioSession.requestRecordPermission { [weak self] granted in
-                DispatchQueue.main.async {
-                    self?.session.sendMessage([
-                        "method": "microphonePermissionResult", 
-                        "granted": granted
-                    ], replyHandler: nil)
-                }
-            }
-            
-        @unknown default:
-            // Send failure result to main app
-            session.sendMessage(["method": "microphonePermissionResult", "granted": false], replyHandler: nil)
+        checkMicrophonePermission { [weak self] granted in
+            self?.sendIfReachable(["method": "microphonePermissionResult", "granted": granted])
         }
     }
 
-    private func setupAudioStreaming() {
+    // MARK: - Notifications
 
-        do {
-            audioEngine = AVAudioEngine()
-            inputNode = audioEngine?.inputNode
+    private func requestNotificationPermissionIfNeeded() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
 
-            let inputFormat = inputNode?.inputFormat(forBus: 0)
-            print("Input format: \(String(describing: inputFormat))")
-            let hardwareSampleRate = inputFormat?.sampleRate ?? 0
-            print("Hardware microphone sample rate: \(hardwareSampleRate)Hz")
-            print("Channels: \(inputFormat?.channelCount ?? 0)")
+    private func scheduleResumeNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = "Omi paused"
+        content.body = "Recording stopped. Open Omi on your watch to resume."
+        let request = UNNotificationRequest(identifier: "omi.watch.resume", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { _ in }
+    }
 
-            // Store the detected sample rate
-            self.detectedSampleRate = hardwareSampleRate
+    // MARK: - Sync
 
-            guard let inputFormat = inputFormat else {
-                print("Failed to get input format")
-                return
+    private func refreshStatus() {
+        let chunks = store.pendingChunks()
+        pendingChunkCount = chunks.count
+        pendingBytes = chunks.reduce(0) { $0 + $1.byteCount }
+        droppedChunkCount = store.droppedChunkCount
+        isPhoneReachable = WCSession.isSupported() && session.isReachable
+        isCapturing = capture.isRunning
+    }
+
+    /// Queue every unacknowledged chunk that is not already in flight, oldest first.
+    func pumpTransfers() {
+        guard WCSession.isSupported(), session.activationState == .activated, session.isCompanionAppInstalled else { return }
+        let inFlight = Set(session.outstandingFileTransfers.compactMap { $0.file.metadata?["chunkId"] as? String })
+        var queued = inFlight.count
+        let now = Date()
+        for chunk in store.pendingChunks() {
+            guard queued < Self.maxQueuedTransfers else { break }
+            if inFlight.contains(chunk.chunkId) { continue }
+            if let delivered = chunk.transferDeliveredAt, now.timeIntervalSince(delivered) < Self.redeliverAfter { continue }
+            session.transferFile(store.audioURL(for: chunk.chunkId), metadata: chunk.transferMetadata)
+            store.update(chunk.chunkId) {
+                $0.transferQueuedAt = now
+                $0.transferDeliveredAt = nil
+                $0.transferAttempts += 1
             }
-            self.inputFormat = inputFormat
-
-            // Create target format for 16kHz resampling
-            guard let targetFormat = AVAudioFormat(standardFormatWithSampleRate: 16000.0, channels: 1) else {
-                print("Failed to create target format")
-                return
-            }
-            self.targetFormat = targetFormat
-
-            // Create audio converter for resampling
-            guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
-                print("Failed to create audio converter")
-                return
-            }
-            self.audioConverter = converter
-
-            let bufferSize: AVAudioFrameCount = 512
-
-            inputNode?.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] (buffer, time) in
-                self?.processAudioBuffer(buffer)
-            }
-
-            try audioEngine?.start()
-            isStreaming = true
-            chunkIndex = 0
-
-        } catch {
-            print("Error details: \(error.localizedDescription)")
+            queued += 1
         }
     }
 
-    private func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard isStreaming else { return }
+    private func handleAck(_ message: [String: Any]) {
+        let ids = (message["chunkIds"] as? [String]) ?? []
+        guard !ids.isEmpty else { return }
+        let deleted = store.delete(chunkIds: ids)
+        lastAckAt = Date()
+        logger.info("phone acknowledged \(ids.count) chunk(s); deleted \(deleted)")
+        refreshStatus()
+    }
 
-        // Validate buffer
-        let frameLength = Int(buffer.frameLength)
-        guard frameLength > 0 else {
-            print("Buffer has zero frames")
-            return
-        }
-
-        // Resample audio to 16kHz
-        let processedBuffer: AVAudioPCMBuffer
-        if let converter = audioConverter, let targetFormat = targetFormat {
-            let outputFrameCapacity = AVAudioFrameCount(ceil(Double(frameLength) * 16000.0 / detectedSampleRate))
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outputFrameCapacity) else {
-                print("Failed to create output buffer for resampling")
-                return
-            }
-
-            var error: NSError?
-            let inputBlock: AVAudioConverterInputBlock = { inNumPackets, outStatus in
-                outStatus.pointee = .haveData
-                return buffer
-            }
-
-            converter.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
-
-            if let error = error {
-                print("Audio conversion error: \(error)")
-                return
-            }
-
-            processedBuffer = outputBuffer
+    private func handleTransferFinished(chunkId: String?, error: Error?) {
+        guard let chunkId else { return }
+        if let error {
+            logger.warning("transfer of \(chunkId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            store.update(chunkId) { $0.transferQueuedAt = nil }
         } else {
-            processedBuffer = buffer
+            store.update(chunkId) { $0.transferDeliveredAt = Date() }
         }
+        refreshStatus()
+    }
 
-        // Convert resampled buffer to 16-bit PCM data
-        let channelData = processedBuffer.floatChannelData?[0]
-
-        var pcmData = [Int16]()
-        var hasNonZeroData = false
-
-        if let channelData = channelData {
-            let processedFrameLength = Int(processedBuffer.frameLength)
-            for i in 0..<processedFrameLength {
-                let sample = channelData[i]
-
-                if abs(sample) > 0.01 { hasNonZeroData = true }
-
-                let pcmSample = Int16(max(-32768, min(32767, sample * 32767)))
-                pcmData.append(pcmSample)
+    private func handleCommand(_ message: [String: Any]) {
+        guard let method = message["method"] as? String else { return }
+        switch method {
+        case "startRecording":
+            startRecording()
+        case "stopRecording":
+            stopRecording()
+        case "requestMicrophonePermission":
+            requestMicrophonePermissionOnly()
+        case "requestBattery":
+            BatteryManager.shared.sendBatteryLevel()
+        case "requestWatchInfo":
+            BatteryManager.shared.sendWatchInfo()
+        case "chunkAck":
+            handleAck(message)
+        case "chunkConfig":
+            if let seconds = message["chunkSeconds"] as? Double {
+                UserDefaults.standard.set(seconds, forKey: ChunkedCaptureEngine.chunkSecondsDefaultsKey)
+                capture.setChunkSeconds(seconds)
             }
-        } else {
-            print("No channel data available")
-            return
+            if let maxBytes = message["maxStorageBytes"] as? Int64 {
+                UserDefaults.standard.set(maxBytes, forKey: WatchChunkStore.maxStorageDefaultsKey)
+            }
+        default:
+            logger.debug("unknown method \(method, privacy: .public)")
         }
+    }
 
-        let byteData = pcmData.withUnsafeBufferPointer { buffer in
-            return Data(buffer: buffer)
-        }
-
-        // Buffer audio data for target-duration chunks
-        bufferAndSendAudioData(byteData)
+    private func sendIfReachable(_ message: [String: Any]) {
+        guard WCSession.isSupported(), session.activationState == .activated, session.isReachable else { return }
+        session.sendMessage(message, replyHandler: nil, errorHandler: nil)
     }
 }
 
 extension WatchAudioRecorderViewModel: WCSessionDelegate {
-#if os(iOS)
-    public func sessionDidBecomeInactive(_ session: WCSession) { }
-    public func sessionDidDeactivate(_ session: WCSession) { }
-#endif
-    func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: (any Error)?) {}
-    
-    func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
-        Task {
-            guard let method = message["method"] as? String else { return }
-            switch method {
-            case "startRecording":
-                self.startRecording()
-            case "stopRecording":
-                self.stopRecording()
-            case "requestMicrophonePermission":
-                self.requestMicrophonePermissionOnly()
-            case "requestBattery":
-                BatteryManager.shared.sendBatteryLevel()
-            case "requestWatchInfo":
-                BatteryManager.shared.sendWatchInfo()
-            default:
-                print("Unknown method: \(method)")
-            }
+    nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: (any Error)?) {
+        Task { @MainActor in
+            self.refreshStatus()
+            self.pumpTransfers()
         }
     }
-    
-    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
-        Task {
-            guard let method = userInfo["method"] as? String else { return }
-            switch method {
-            case "requestBattery":
-                BatteryManager.shared.sendBatteryLevel()
-            case "requestWatchInfo":
-                BatteryManager.shared.sendWatchInfo()
-            default:
-                print("Unknown background method: \(method)")
-            }
+
+    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        Task { @MainActor in
+            self.refreshStatus()
+            self.pumpTransfers()
         }
+    }
+
+    nonisolated func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: (any Error)?) {
+        let chunkId = fileTransfer.file.metadata?["chunkId"] as? String
+        let failure = error
+        Task { @MainActor in self.handleTransferFinished(chunkId: chunkId, error: failure) }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        Task { @MainActor in self.handleCommand(message) }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        Task { @MainActor in self.handleCommand(userInfo) }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+        Task { @MainActor in self.handleCommand(applicationContext) }
     }
 }

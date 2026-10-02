@@ -111,9 +111,16 @@ class WatchRecordingPresentationTest < Minitest::Test
         final class TestWatchRecorder: WatchRecorderControlling {
             @Published var isRecording = false
             @Published var recordingStartedAt: Date?
+            @Published var isCapturing = false
+            @Published var pendingChunkCount = 0
+            @Published var pendingBytes: Int64 = 0
+            @Published var droppedChunkCount = 0
+            @Published var isPhoneReachable = false
+            @Published var statusNote: String?
 
             func startRecording() {}
             func stopRecording() {}
+            func appBecameActive() {}
         }
       SWIFT
 
