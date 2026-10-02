@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -43,6 +44,16 @@ STALE_IN_PROGRESS_RECOVERY_BATCH = 10
 # many recovery passes is moved to a terminal state instead of being retried by every session.
 # More than one pass so a transient misconfiguration cannot terminalize rows on first sight.
 STALE_IN_PROGRESS_RECOVERY_MAX_ATTEMPTS = 3
+
+
+def conversation_private_cloud_sync_enabled(user_enabled: bool) -> bool:
+    """Private cloud sync for a new conversation needs the user setting and a configured bucket.
+
+    ``utils.other.storage`` defaults ``BUCKET_PRIVATE_CLOUD_SYNC`` to the hosted service's
+    bucket, which a self-hosted service account cannot list, so finalization failed with a 403
+    on every conversation. Without an explicit bucket the conversation simply has no cloud audio.
+    """
+    return bool(user_enabled) and bool((os.getenv('BUCKET_PRIVATE_CLOUD_SYNC') or '').strip())
 
 
 class LiveConversationController:
@@ -231,7 +242,7 @@ class LiveConversationController:
             photos=[],
             status=ConversationStatus.in_progress,
             source=source,
-            private_cloud_sync_enabled=self.host.private_cloud_sync_enabled,
+            private_cloud_sync_enabled=conversation_private_cloud_sync_enabled(self.host.private_cloud_sync_enabled),
             call_id=request.call_id if self.host.is_multi_channel else None,
             client_device_id=context.client_device_id,
             client_platform=context.platform,
