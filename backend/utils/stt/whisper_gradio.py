@@ -8,6 +8,9 @@ through the three Gradio HTTP calls:
 2. ``POST /gradio_api/call/transcribe_file`` -> ``{"event_id": ...}``
 3. ``GET /gradio_api/call/transcribe_file/<event_id>`` -> SSE; ``event: complete`` carries the text
 
+Chunks without voiced speech are dropped before upload and hallucinated text ("Thank you.",
+"You", repetition loops) is dropped after, see ``utils/stt/whisper_guards.py``.
+
 Enabled by ``WHISPER_GRADIO_URL``. A failed chunk is logged and skipped; it never kills the
 listen socket. Every call leaves a .wav/.txt in the server's GRADIO_TEMP_DIR.
 """
@@ -31,68 +34,103 @@ from utils.async_tasks import create_named_task
 from config.stt_provider_policy import normalized_stt_language
 from utils.stt.socket import STTSocket
 from utils.stt.streaming import STTService
+from utils.stt.whisper_guards import SpeechGate, filter_transcript
 
 logger = logging.getLogger(__name__)
 
 WHISPER_GRADIO_MODEL = 'large-v3-turbo'
 
-# Positional parameters after the file list for Whisper-WebUI's /transcribe_file, copied
-# verbatim from the voicemail workflow: txt output, large-v3-turbo, english, float16, cuda,
-# Silero VAD on, diarization and BGM separation off. Index 44 (hf_token) stays empty.
+# Positional parameters after the file list for Whisper-WebUI's /transcribe_file, in the order
+# of its /gradio_api/info schema (index = position after the file list). Based on the voicemail
+# workflow (txt output, large-v3-turbo, english, float16, cuda, diarization and BGM separation
+# off), with the anti-hallucination settings below. Index 45 (hf_token) stays empty.
+#
+# Live chunks are short utterances, often with no speech at all, so:
+# - 14 condition_on_previous_text=False: no prompt carry-over, which feeds repetition loops.
+# - 26 word_timestamps=True: required by faster-whisper for 31 to have any effect.
+# - 31 hallucination_silence_threshold=2.0 s: skip silent stretches where a hallucination is found.
+# - 37-42 Silero VAD on (threshold 0.5, min speech 250 ms, pad 400 ms instead of 2 s). Note that
+#   Whisper-WebUI falls back to the unfiltered audio when VAD removes everything, so the local
+#   SpeechGate (utils/stt/whisper_guards.py) is what keeps pure noise off the server.
+# - 9 log_prob_threshold=-1.0, 10 no_speech_threshold=0.6, 17 temperature=0, 18
+#   compression_ratio_threshold=2.4 (faster-whisper defaults, kept explicit).
+# - 16 initial_prompt comes from WHISPER_GRADIO_INITIAL_PROMPT (default empty) to fix name
+#   spelling. A sentence-style prompt ("Notes from Cason Clark.") fixed "Kaysen"/"Kacen" without
+#   being echoed on noise in probing; a bare name, or 32 hotwords, came back as the whole
+#   transcript of noise and even dropped the name from real speech, so hotwords stay empty.
+#   Any chunk that is only an echo of the prompt is dropped by filter_transcript.
+TRANSCRIBE_PARAM_INDEX: Dict[str, int] = {
+    'log_prob_threshold': 9,
+    'no_speech_threshold': 10,
+    'condition_on_previous_text': 14,
+    'initial_prompt': 16,
+    'temperature': 17,
+    'compression_ratio_threshold': 18,
+    'word_timestamps': 26,
+    'hallucination_silence_threshold': 31,
+    'hotwords': 32,
+    'vad_filter': 37,
+    'vad_threshold': 38,
+    'vad_min_speech_duration_ms': 39,
+    'vad_min_silence_duration_ms': 41,
+    'vad_speech_pad_ms': 42,
+    'diarization': 43,
+    'hf_token': 45,
+}
 TRANSCRIBE_PARAMS: Tuple[Any, ...] = (
-    "",
-    False,
-    True,
-    "txt",
-    False,
-    "large-v3-turbo",
-    "english",
-    False,
-    5,
-    -1,
-    0.6,
-    "float16",
-    5,
-    1,
-    True,
-    0.5,
-    "",
-    0,
-    2.4,
-    1,
-    1,
-    0,
-    "",
-    True,
-    "[-1]",
-    1,
-    False,
-    "\"'“¿([{-",
-    "\"'.。,，!！?？:：”)]}、",
-    0,
-    30,
-    0,
-    "",
-    0.5,
-    1,
-    24,
-    True,
-    False,
-    0.5,
-    250,
-    9999,
-    1000,
-    2000,
-    False,
-    "cuda",
-    "",
-    False,
-    False,
-    "UVR-MDX-NET-Inst_HQ_4",
-    "cuda",
-    256,
-    False,
-    True,
+    "",  # 0 input_folder_path
+    False,  # 1 include_subdirectory
+    True,  # 2 save_same_dir
+    "txt",  # 3 file_format
+    False,  # 4 add_timestamp
+    "large-v3-turbo",  # 5 model
+    "english",  # 6 language
+    False,  # 7 translate
+    5,  # 8 beam_size
+    -1.0,  # 9 log_prob_threshold
+    0.6,  # 10 no_speech_threshold
+    "float16",  # 11 compute_type
+    5,  # 12 best_of
+    1,  # 13 patience
+    False,  # 14 condition_on_previous_text
+    0.5,  # 15 prompt_reset_on_temperature
+    "",  # 16 initial_prompt
+    0,  # 17 temperature
+    2.4,  # 18 compression_ratio_threshold
+    1,  # 19 length_penalty
+    1,  # 20 repetition_penalty
+    0,  # 21 no_repeat_ngram_size
+    "",  # 22 prefix
+    True,  # 23 suppress_blank
+    "[-1]",  # 24 suppress_tokens
+    1,  # 25 max_initial_timestamp
+    True,  # 26 word_timestamps
+    "\"'“¿([{-",  # 27 prepend_punctuations
+    "\"'.。,，!！?？:：”)]}、",  # 28 append_punctuations
+    0,  # 29 max_new_tokens
+    30,  # 30 chunk_length
+    2.0,  # 31 hallucination_silence_threshold
+    "",  # 32 hotwords
+    0.5,  # 33 language_detection_threshold
+    1,  # 34 language_detection_segments
+    24,  # 35 batch_size
+    True,  # 36 offload whisper model
+    True,  # 37 vad_filter (Silero)
+    0.5,  # 38 vad threshold
+    250,  # 39 min_speech_duration_ms
+    9999,  # 40 max_speech_duration_s
+    1000,  # 41 min_silence_duration_ms
+    400,  # 42 speech_pad_ms
+    False,  # 43 diarization
+    "cuda",  # 44 diarization device
+    "",  # 45 hf_token: never hard-code one
+    False,  # 46 offload diarization model
+    False,  # 47 bgm separation
+    "UVR-MDX-NET-Inst_HQ_4",  # 48 uvr model
+    "cuda",  # 49 uvr device
+    256,  # 50 uvr segment size
+    False,  # 51 save separated files
+    True,  # 52 offload uvr model
 )
 assert len(TRANSCRIBE_PARAMS) == 53
 
@@ -139,8 +177,19 @@ def pcm16_to_wav(pcm: bytes, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
-def build_transcribe_payload(server_path: str) -> Dict[str, Any]:
-    return {'data': [[{'path': server_path, 'meta': {'_type': 'gradio.FileData'}}], *TRANSCRIBE_PARAMS]}
+def whisper_gradio_initial_prompt() -> str:
+    return (os.getenv('WHISPER_GRADIO_INITIAL_PROMPT') or '').strip()
+
+
+def transcribe_params(initial_prompt: Optional[str] = None) -> List[Any]:
+    params = list(TRANSCRIBE_PARAMS)
+    prompt = whisper_gradio_initial_prompt() if initial_prompt is None else initial_prompt
+    params[TRANSCRIBE_PARAM_INDEX['initial_prompt']] = prompt
+    return params
+
+
+def build_transcribe_payload(server_path: str, initial_prompt: Optional[str] = None) -> Dict[str, Any]:
+    return {'data': [[{'path': server_path, 'meta': {'_type': 'gradio.FileData'}}], *transcribe_params(initial_prompt)]}
 
 
 def parse_upload_response(loaded: Any) -> str:
@@ -202,11 +251,15 @@ def extract_transcript(sse_body: str) -> str:
     raise WhisperGradioError(f'no "event: complete" in response: {sse_body[:300]}')
 
 
-async def transcribe_wav(client: httpx.AsyncClient, base_url: str, wav: bytes) -> str:
+async def transcribe_wav(
+    client: httpx.AsyncClient, base_url: str, wav: bytes, initial_prompt: Optional[str] = None
+) -> str:
     resp = await client.post(f'{base_url}/gradio_api/upload', files={'files': ('omi-chunk.wav', wav, 'audio/wav')})
     resp.raise_for_status()
     server_path = parse_upload_response(resp.json())
-    resp = await client.post(f'{base_url}/gradio_api/call/transcribe_file', json=build_transcribe_payload(server_path))
+    resp = await client.post(
+        f'{base_url}/gradio_api/call/transcribe_file', json=build_transcribe_payload(server_path, initial_prompt)
+    )
     resp.raise_for_status()
     event_id = resp.json().get('event_id') if isinstance(resp.json(), dict) else None
     if not event_id:
@@ -389,16 +442,25 @@ class WhisperGradioSocket(STTSocket):
         client: Optional[httpx.AsyncClient] = None,
         chunk_timeout_s: Optional[float] = None,
         max_queue: Optional[int] = None,
+        speech_gate: Optional[SpeechGate] = None,
     ) -> None:
         self._stream_transcript = stream_transcript
         self._base_url = base_url.rstrip('/')
         self._sample_rate = sample_rate
+        min_rms = _env_float('WHISPER_GRADIO_MIN_RMS', 300.0)
         self._segmenter = segmenter or UtteranceSegmenter(
             sample_rate,
             max_s=_env_float('WHISPER_GRADIO_MAX_CHUNK_SECONDS', 12.0),
             silence_s=_env_float('WHISPER_GRADIO_SILENCE_SECONDS', 0.7),
-            min_rms=_env_float('WHISPER_GRADIO_MIN_RMS', 300.0),
+            min_rms=min_rms,
         )
+        # Local speech gate: noise, room tone and clicks never reach Whisper (see whisper_guards).
+        self._speech_gate = speech_gate or SpeechGate(
+            min_speech_s=_env_float('WHISPER_GRADIO_MIN_SPEECH_SECONDS', 0.6),
+            min_voiced_s=_env_float('WHISPER_GRADIO_MIN_VOICED_SECONDS', 0.3),
+            min_rms=min_rms,
+        )
+        self._initial_prompt = whisper_gradio_initial_prompt()
         self._chunk_timeout_s = chunk_timeout_s or _env_float('WHISPER_GRADIO_CHUNK_TIMEOUT_SECONDS', 30.0)
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0))
@@ -411,6 +473,8 @@ class WhisperGradioSocket(STTSocket):
         self._dead_reason: Optional[str] = None
         self.chunks_ok = 0
         self.chunks_failed = 0
+        self.chunks_gated = 0  # dropped before upload: not enough voiced speech
+        self.chunks_filtered = 0  # transcribed, but the text was a known hallucination
 
     def start(self) -> None:
         self._worker = create_named_task(self._run(), name='whisper_gradio_stt_worker')
@@ -490,10 +554,19 @@ class WhisperGradioSocket(STTSocket):
                 await self._close_client()
 
     async def _process(self, utt: Utterance) -> None:
+        gate = self._speech_gate.evaluate(utt.pcm, utt.sample_rate)
+        if not gate.passed:
+            self.chunks_gated += 1
+            logger.info(
+                'Whisper-Gradio gated %.1fs chunk at %.1fs (no speech: %s)', utt.duration, utt.start, gate.describe()
+            )
+            return
         t0 = time.monotonic()
         try:
             text = await asyncio.wait_for(
-                transcribe_wav(self._client, self._base_url, pcm16_to_wav(utt.pcm, utt.sample_rate)),
+                transcribe_wav(
+                    self._client, self._base_url, pcm16_to_wav(utt.pcm, utt.sample_rate), self._initial_prompt
+                ),
                 timeout=self._chunk_timeout_s,
             )
         except Exception as error:
@@ -516,6 +589,16 @@ class WhisperGradioSocket(STTSocket):
             len(text),
         )
         if not text:
+            return
+        text, drop_reason = filter_transcript(text, prompt=self._initial_prompt)
+        if drop_reason:
+            self.chunks_filtered += 1
+            logger.info(
+                'Whisper-Gradio dropped %.1fs chunk at %.1fs as hallucination (%s)',
+                utt.duration,
+                utt.start,
+                drop_reason,
+            )
             return
         segment = {
             'speaker': 'SPEAKER_00',

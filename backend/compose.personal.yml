@@ -47,6 +47,8 @@ services:
     environment:
       REDIS_DB_HOST: redis
       REDIS_DB_PORT: "6379"
+      # Whisper initial prompt: fixes the owner's name spelling ("Kaysen" -> "Cason").
+      WHISPER_GRADIO_INITIAL_PROMPT: ${WHISPER_GRADIO_INITIAL_PROMPT:-Notes from Cason Clark.}
     depends_on:
       redis:
         condition: service_healthy

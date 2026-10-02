@@ -12,7 +12,9 @@ import pytest
 from config.stt_provider_policy import STTServingSurface
 from utils.stt import streaming
 from utils.transcribe_decisions import client_codec_for_source
+from utils.stt.whisper_guards import SpeechGate
 from utils.stt.whisper_gradio import (
+    TRANSCRIBE_PARAM_INDEX,
     TRANSCRIBE_PARAMS,
     UtteranceSegmenter,
     WhisperGradioError,
@@ -83,6 +85,30 @@ def test_upload_response_and_payload_shape():
     assert len(payload['data']) == 1 + 53 and len(TRANSCRIBE_PARAMS) == 53
     assert payload['data'][1 + 5] == 'large-v3-turbo' and payload['data'][1 + 6] == 'english'
     assert payload['data'][1 + 3] == 'txt' and payload['data'][1 + 45] == ''  # never ship an HF token
+
+
+def test_transcribe_params_enable_anti_hallucination_settings():
+    p = {name: TRANSCRIBE_PARAMS[i] for name, i in TRANSCRIBE_PARAM_INDEX.items()}
+    assert p['vad_filter'] is True and p['vad_threshold'] == 0.5
+    assert p['vad_min_speech_duration_ms'] == 250 and p['vad_speech_pad_ms'] == 400
+    assert p['condition_on_previous_text'] is False
+    assert p['no_speech_threshold'] == 0.6 and p['log_prob_threshold'] == -1.0
+    assert p['compression_ratio_threshold'] == 2.4 and p['temperature'] == 0
+    assert p['word_timestamps'] is True and p['hallucination_silence_threshold'] == 2.0
+    # Hotwords made Whisper answer noise with the hotword; the prompt is opt-in per deployment.
+    assert p['initial_prompt'] == '' and p['hotwords'] == ''
+    assert p['diarization'] is False and p['hf_token'] == ''
+
+
+def test_initial_prompt_comes_from_env(monkeypatch):
+    index = 1 + TRANSCRIBE_PARAM_INDEX['initial_prompt']
+    monkeypatch.delenv('WHISPER_GRADIO_INITIAL_PROMPT', raising=False)
+    assert build_transcribe_payload('/a.wav')['data'][index] == ''
+    monkeypatch.setenv('WHISPER_GRADIO_INITIAL_PROMPT', ' Notes from Cason Clark. ')
+    payload = build_transcribe_payload('/a.wav')
+    assert payload['data'][index] == 'Notes from Cason Clark.'
+    assert len(payload['data']) == 54 and payload['data'][1 + TRANSCRIBE_PARAM_INDEX['hotwords']] == ''
+    assert build_transcribe_payload('/a.wav', initial_prompt='')['data'][index] == ''
 
 
 # ---------------------------------------------------------------- WAV + chunking
@@ -191,7 +217,10 @@ def test_socket_emits_segments_and_survives_failed_chunk():
 
     async def run():
         client = httpx.AsyncClient(transport=_gradio_transport(calls, fail_first=True))
-        sock = WhisperGradioSocket(emitted.extend, 'http://whisper/', SR, client=client)
+        # A pure tone is periodic but not speech to WebRTC VAD; gate on RMS + pitch only.
+        sock = WhisperGradioSocket(
+            emitted.extend, 'http://whisper/', SR, client=client, speech_gate=SpeechGate(use_webrtc=False)
+        )
         sock.start()
         audio = _tone(1.0) + _silence(1.0) + _tone(1.0) + _silence(0.2)
         for i in range(0, len(audio), 3200):
@@ -222,3 +251,37 @@ def test_live_selection_uses_whisper_gradio_only_when_configured(monkeypatch):
     assert streaming.get_stt_service_for_language('en')[0] != streaming.STTService.whisper_gradio
     monkeypatch.delenv('WHISPER_GRADIO_URL')
     assert whisper_gradio_live_selection('en') is None
+
+
+def _run_socket(audio, text, gate=None):
+    calls, emitted = [], []
+
+    async def run():
+        client = httpx.AsyncClient(transport=_gradio_transport(calls, text=text))
+        sock = WhisperGradioSocket(emitted.extend, 'http://whisper', SR, client=client, speech_gate=gate)
+        sock.start()
+        for i in range(0, len(audio), 3200):
+            sock.send(audio[i : i + 3200])
+            await asyncio.sleep(0)
+        await sock.drain_and_close()
+        await client.aclose()
+        return sock
+
+    return asyncio.run(run()), calls, emitted
+
+
+def test_socket_never_uploads_noise():
+    rng = np.random.default_rng(3)
+    noise = (rng.normal(0, 2000, SR * 3)).astype('<i2').tobytes()  # loud enough to chunk
+    sock, calls, emitted = _run_socket(_silence(0.5) + noise + _silence(1.0), 'Thank you.')
+    assert sock.chunks_gated >= 1 and sock.chunks_ok == 0
+    assert calls == [] and emitted == []
+
+
+def test_socket_drops_hallucinated_text_but_keeps_real_text():
+    audio = _tone(1.2) + _silence(1.0)
+    gate = SpeechGate(use_webrtc=False)
+    sock, calls, emitted = _run_socket(audio, 'Thank you.', gate)
+    assert (sock.chunks_ok, sock.chunks_filtered) == (1, 1) and emitted == []
+    sock, calls, emitted = _run_socket(audio, 'Thank you for the coffee.', gate)
+    assert sock.chunks_filtered == 0 and [s['text'] for s in emitted] == ['Thank you for the coffee.']
