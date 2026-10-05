@@ -260,6 +260,12 @@ checks:
     lanes: ["local", "ci"]
     platforms: ["macos"]
     reason: "SCA-273: the real watch presentation contract must stop its ripple after five seconds, preserve elapsed time, and localize accessibility labels for every native locale"
+  - id: watch-chunk-sync-core
+    command: ["ruby", "app/ios/test/watch_chunk_sync_core_test.rb"]
+    triggers: ["app/ios/Runner/WatchChunkSyncCore.swift", "app/ios/Runner/WatchChunkSync.swift", "app/ios/Runner/AppDelegate.swift", "app/ios/Runner/Info.plist", "app/ios/Runner.xcodeproj/project.pbxproj", "app/ios/test/watch_chunk_sync_core_test.rb", ".github/checks-manifest.yaml"]
+    lanes: ["local", "ci"]
+    platforms: ["macos"]
+    reason: "Apple Watch chunks upload natively in the background; WAL framing, response classification, batching, dedupe and ack-after-confirmation rules must stay covered and BG task identifiers must stay permitted"
   - id: deferred-work-markers
     command: ["python3", ".github/scripts/deferred-work-marker-count.py", "--changed-files", "{changed_files}", "--base", "{base}", "--check-new"]
     triggers: ["all"]

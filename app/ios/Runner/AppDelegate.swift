@@ -103,6 +103,9 @@ final class QuickActionsIconPatcher: NSObject {
   ) -> Bool {
     GeneratedPluginRegistrant.register(with: self)
     QuickActionsIconPatcher.shared.startObserving()
+    // Hands-off watch chunk upload: registers BGTaskScheduler tasks (must happen during launch)
+    // and reattaches the background URLSession before any WatchConnectivity file arrives.
+    WatchChunkSync.shared.start()
       
       
       if WCSession.isSupported() {
@@ -350,6 +353,17 @@ final class QuickActionsIconPatcher: NSObject {
       completionHandler(exportedMappings.isEmpty ? .noData : .newData)
   }
 
+  override func application(
+    _ application: UIApplication,
+    handleEventsForBackgroundURLSession identifier: String,
+    completionHandler: @escaping () -> Void
+  ) {
+    if WatchChunkSync.shared.handleBackgroundSessionEvents(identifier: identifier, completionHandler: completionHandler) {
+      return
+    }
+    super.application(application, handleEventsForBackgroundURLSession: identifier, completionHandler: completionHandler)
+  }
+
   override func applicationWillEnterForeground(_ application: UIApplication) {
     super.applicationWillEnterForeground(application)
     OmiBleManager.shared.reconnectStalePeripherals()
@@ -450,7 +464,10 @@ func registerPlugins(registry: FlutterPluginRegistry) {
 
 extension AppDelegate: WCSessionDelegate {
     
-    func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) { }
+    func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
+        // Acks for confirmed watch chunks queue up until the session is active.
+        WatchChunkSync.shared.kick(reason: "wc activated")
+    }
     
     func sessionDidBecomeInactive(_ session: WCSession) {
         print("Session Watch Become Inactive")

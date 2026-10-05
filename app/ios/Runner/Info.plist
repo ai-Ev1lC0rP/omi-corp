@@ -8,6 +8,8 @@
 		<string>com.casonclark.omi.daily-summary</string>
 		<string>dev.flutter.background.refresh</string>
 		<string>com.pravera.flutter_foreground_task.refresh</string>
+		<string>com.omi.watchchunks.refresh</string>
+		<string>com.omi.watchchunks.processing</string>
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>

@@ -30,6 +30,8 @@
 		3E200B606D3D02BFEF213BF1 /* MWDATCore in Frameworks */ = {isa = PBXBuildFile; productRef = F954EF7C37697F83E05F20D8 /* MWDATCore */; };
 		3FF07873AB8530FF5964C7E4 /* devDebug.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = 17DD34CA2CFE6F3845E13C99 /* devDebug.xcconfig */; };
 		4255287D2E7C4B8300FD5CFB /* RecorderHostApiImpl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4255287C2E7C4B8300FD5CFB /* RecorderHostApiImpl.swift */; };
+		AC58EFE88D5295AC016F741F /* WatchChunkSyncCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE86F761B2443E73166C7971 /* WatchChunkSyncCore.swift */; };
+		C4E35F33810E5B927133E0D1 /* WatchChunkSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEB339100448FE3653172E5E /* WatchChunkSync.swift */; };
 		426B89AD2C46919D00E24442 /* Config in Resources */ = {isa = PBXBuildFile; fileRef = 426B89AC2C46919D00E24442 /* Config */; };
 		42A7BA3E2E788BD400138969 /* omiWatchApp.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 42A7BA342E788BD300138969 /* omiWatchApp.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); platformFilter = iphoneos; }; };
 		42A7BA4C2E788F0100138969 /* WatchConnectivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 42A7BA4B2E788F0100138969 /* WatchConnectivity.framework */; };
@@ -55,6 +57,8 @@
 		56428CF0D6B2EDA13E401907 /* devProfile.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = 556416C8748DD3DD2C06A9DB /* devProfile.xcconfig */; };
 		5A2653E6C23BCD2FF632A493 /* AppleRemindersService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD12345678901234567890CD /* AppleRemindersService.swift */; };
 		5B5A7C09B854EF0BFB2C4D18 /* RecorderHostApiImpl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4255287C2E7C4B8300FD5CFB /* RecorderHostApiImpl.swift */; };
+		65CF08B8EA2588EAE325414E /* WatchChunkSyncCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE86F761B2443E73166C7971 /* WatchChunkSyncCore.swift */; };
+		CAB89F3ED9A1D92C512B2D2D /* WatchChunkSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEB339100448FE3653172E5E /* WatchChunkSync.swift */; };
 		5FC8F848E2BD3FDF3AF27F37 /* RayBanMetaAudioCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAADF00DF00DF00DF00DFC01 /* RayBanMetaAudioCapture.swift */; };
 		6382AF22C65ED5A1AA482ECD /* PhoneMicHostApiImpl.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAADF00DF00DF00DF00DFD09 /* PhoneMicHostApiImpl.swift */; };
 		6436409A27A31CD800820AF7 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 6436409C27A31CD800820AF7 /* InfoPlist.strings */; };
@@ -200,6 +204,8 @@
 		42127DA02C283C4E0005AB40 /* OneSignalOutcomes.xcframework */ = {isa = PBXFileReference; expectedSignature = "AppleDeveloperProgram:J3J28YJX9L:OneSignal, Inc."; lastKnownFileType = wrapper.xcframework; name = OneSignalOutcomes.xcframework; path = Pods/OneSignalXCFramework/iOS_SDK/OneSignalSDK/OneSignal_Outcomes/OneSignalOutcomes.xcframework; sourceTree = "<group>"; };
 		42476A832C5E369200426330 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		4255287C2E7C4B8300FD5CFB /* RecorderHostApiImpl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecorderHostApiImpl.swift; sourceTree = "<group>"; };
+		DE86F761B2443E73166C7971 /* WatchChunkSyncCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchChunkSyncCore.swift; sourceTree = "<group>"; };
+		DEB339100448FE3653172E5E /* WatchChunkSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchChunkSync.swift; sourceTree = "<group>"; };
 		426B89AC2C46919D00E24442 /* Config */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Config; sourceTree = "<group>"; };
 		42A7BA342E788BD300138969 /* omiWatchApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = omiWatchApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		42A7BA4B2E788F0100138969 /* WatchConnectivity.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WatchConnectivity.framework; path = System/Library/Frameworks/WatchConnectivity.framework; sourceTree = SDKROOT; };
@@ -463,6 +469,8 @@
 				BAADF00DF00DF00DF00DFD00 /* PhoneMic */,
 				42BABFC02F2A81B100E78A3C /* PhoneCalls */,
 				4255287C2E7C4B8300FD5CFB /* RecorderHostApiImpl.swift */,
+				DE86F761B2443E73166C7971 /* WatchChunkSyncCore.swift */,
+				DEB339100448FE3653172E5E /* WatchChunkSync.swift */,
 				5FCEB2FF2C2758C000B17EE8 /* RunnerRelease-dev.entitlements */,
 				5FCEB2FE2C2758BD00B17EE8 /* RunnerProfile-dev.entitlements */,
 				5FCEB2FD2C2758BA00B17EE8 /* RunnerDebug-dev.entitlements */,
@@ -958,6 +966,8 @@
 				42BABFCD2F2A81B100E78A3C /* OmiRegionCheck.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				4255287D2E7C4B8300FD5CFB /* RecorderHostApiImpl.swift in Sources */,
+				AC58EFE88D5295AC016F741F /* WatchChunkSyncCore.swift in Sources */,
+				C4E35F33810E5B927133E0D1 /* WatchChunkSync.swift in Sources */,
 				42B17C7C2F69BC6600BFDA9D /* PigeonCommunicator.g.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1002,6 +1012,8 @@
 				AFF50718E1B191240567E4A7 /* OmiRegionCheck.swift in Sources */,
 				B07ABDD2736E2C87A59FB5E1 /* GeneratedPluginRegistrant.m in Sources */,
 				5B5A7C09B854EF0BFB2C4D18 /* RecorderHostApiImpl.swift in Sources */,
+				65CF08B8EA2588EAE325414E /* WatchChunkSyncCore.swift in Sources */,
+				CAB89F3ED9A1D92C512B2D2D /* WatchChunkSync.swift in Sources */,
 				15BE32846414AB444D807D9B /* PigeonCommunicator.g.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
