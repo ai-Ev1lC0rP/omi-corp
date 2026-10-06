@@ -1037,7 +1037,9 @@ class TestGetSttServiceForLanguage:
 
     def test_retired_configuration_uses_non_deepgram_defaults(self):
         with patch('utils.stt.streaming.stt_service_models', ['dg-nova-3']), patch.dict(
-            'os.environ', {'HOSTED_PARAKEET_API_URL': 'http://parakeet.test'}
+            'os.environ',
+            {'HOSTED_PARAKEET_API_URL': 'http://parakeet.test'},
+            clear=True,
         ):
             service, lang, model = get_stt_service_for_language('en', multi_lang_enabled=False)
 
