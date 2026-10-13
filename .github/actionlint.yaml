@@ -3,5 +3,7 @@ self-hosted-runner:
     - macos
     - omi-desktop-qualification
     - omi-qual-m1-studio
+    - Linux
+    - X64
 
 config-variables: null
